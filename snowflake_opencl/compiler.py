@@ -140,14 +140,14 @@ class OpenCLCompiler(Compiler):
             # is there a one to one mapping between targets and IterationSpace nodes?
             for target, ispace in zip(self.target_names, c_tree.body):
                 shape = subconfig[target].shape
-                self.global_work_size = global_work_size(shape, ispace)
+                self.global_work_size = global_work_size(shape, ispace)  # should only do once
                 sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(ispace)
                 sub = self.parent_cls.BlockConverter().visit(sub) # changes node to MultiNode
                 components.append(sub)
 
             self.local_work_size = local_work_size(self.global_work_size)
 
-            kernel_func = FunctionDecl(name=SymbolRef("stencil_kernel"),  # 'kernel' is a keyword
+            kernel_func = FunctionDecl(name=SymbolRef("stencil_kernel"),  # 'kernel' is a keyword, embed specific name?
                                        params=[
                                                SymbolRef(name=arg_name, sym_type=get_ctype(
                                                     arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack

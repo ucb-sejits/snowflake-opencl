@@ -1,0 +1,2 @@
+-e git+git://github.com/ucb-sejits/ctree@Rebox#egg=ctree
+-e git+git://github.com/ucb-sejits/snowflake@master#egg=snowflake
