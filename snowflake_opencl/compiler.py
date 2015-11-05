@@ -1,7 +1,7 @@
 import operator
 import ctypes
 import pycl as cl
-from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode
+from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile
 from ctree.ocl.nodes import OclFile
 from ctree.templates.nodes import StringTemplate
 from ctree.types import get_ctype
@@ -11,6 +11,7 @@ from ctree.nodes import Project
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
+from snowflake_opencl.util import flattened_to_multi_index, global_work_size, local_work_size, generate_control
 
 __author__ = 'dorthyluu'
 
@@ -86,22 +87,23 @@ class OpenCLCompiler(Compiler):
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
-            for file in project_node.files:
-                source_code = file.codegen()
-                # file._compile(source_code)
-                kernel = cl.clCreateProgramWithSource(self.context, source_code).build()["stencil_kernel"]
-                self.kernels.append(kernel)
+            source_code = project_node.files[1].codegen()
+            self.kernel = cl.clCreateProgramWithSource(self.context, source_code).build()["stencil_kernel"]
+            self._c_function = self._compile(entry_point_name, project_node, entry_point_typesig)
+            self.entry_point_name = entry_point_name
             return self
 
         def __call__(self, *args, **kwargs):
             queue = cl.clCreateCommandQueue(self.context)
-            true_args = [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
-            events = []
-            for kernel in self.kernels:
-                # run_evt = kernel.kernel(*kernel_args).on(self.queue, gsize=kernel.gsize, lsize=kernel.lsize)
-                run_evt = kernel(*true_args).on(queue, gsize=self.gws, lsize=self.lws)
-                events.append(run_evt)
-            cl.clWaitForEvents(*events)
+            true_args = [queue, self.kernel] + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
+            return self._c_function(*true_args)
+
+            # events = []
+            # for kernel in self.kernels:
+            #     # run_evt = kernel.kernel(*kernel_args).on(self.queue, gsize=kernel.gsize, lsize=kernel.lsize)
+            #     run_evt = kernel(*true_args).on(queue, gsize=self.gws, lsize=self.lws)
+            #     events.append(run_evt)
+            # cl.clWaitForEvents(*events)
 
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, names=None, target_names=('out',), index_name='index',
@@ -147,17 +149,23 @@ class OpenCLCompiler(Compiler):
 
             self.local_work_size = local_work_size(self.global_work_size)
 
+            params=[
+                    SymbolRef(name=arg_name, sym_type=get_ctype(
+                         arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack
+                     ), _global=True) for arg_name, arg in subconfig.items()
+                   ]
+
             kernel_func = FunctionDecl(name=SymbolRef("stencil_kernel"),  # 'kernel' is a keyword, embed specific name?
-                                       params=[
-                                               SymbolRef(name=arg_name, sym_type=get_ctype(
-                                                    arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack
-                                                ), _global=True) for arg_name, arg in subconfig.items()
-                                              ],
+                                       params=params,
                                        defn=components)
             kernel_func.set_kernel()
             ocl_file = OclFile(body=includes + encode_funcs + [kernel_func])
+
+            # c_file = CFile(name="stencil_control", body=[], config_target='opencl')
+            # ???
+            c_file = generate_control("stencil_kernel", self.global_work_size, self.local_work_size, params, [kernel_func])
             # print(ocl_file)
-            return [ocl_file]
+            return [c_file, ocl_file]
 
 
         def finalize(self, transform_result, program_config):
@@ -180,49 +188,3 @@ class OpenCLCompiler(Compiler):
         )
 
 
-def flattened_to_multi_index(flattened_id_symbol, shape, multipliers=None, offsets=None):
-    # flattened_id should be a node
-    # offsets applied after multipliers
-
-    body = []
-    ndim = len(shape)
-    full_size = reduce(operator.mul, shape, 1)
-    for i in range(ndim):
-        stmt = flattened_id_symbol
-        mod_size = reduce(operator.mul, shape[i:], 1)
-        div_size = reduce(operator.mul, shape[(i + 1):], 1)
-        if mod_size < full_size:
-            stmt = Mod(stmt, Constant(mod_size))
-        if div_size != 1:
-            stmt = Div(stmt, Constant(div_size))
-        if multipliers and multipliers[i] != 1:
-            stmt = Mul(stmt, Constant(multipliers[i]))
-        if offsets and offsets[i] != 0:
-            stmt = Add(stmt, Constant(offsets[i]))
-        body.append(stmt)
-    return body
-
-def global_work_size(array_shape, iteration_space):
-    gws = []
-    make_low = lambda low, dim: low if low >= 0 else array_shape[dim] + low
-    make_high = lambda high, dim: high if high > 0 else array_shape[dim] + high
-
-    for space in iteration_space.space.spaces:
-        lows = tuple(make_low(low, dim) for dim, low in enumerate(space[0]))
-        highs = tuple(make_high(high, dim) for dim, high in enumerate(space[1]))
-        strides = space[2]
-        size = 1
-        for dim, (high, low, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
-            size *= (high - low + stride - 1) / stride
-        gws.append(size)
-
-    if (all(size == gws[0] for size in gws)):
-        return gws[0]
-    else:
-        raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
-
-def local_work_size(gws):
-    lws = 32
-    while gws % lws != 0:
-        lws -= 1
-    return lws
