@@ -84,8 +84,7 @@ class OpenCLCompiler(Compiler):
             self.context = context
             self.gws = global_work_size
             self.lws = local_work_size
-
-            self.kernels = []
+            self.kernel = None
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
@@ -177,8 +176,8 @@ class OpenCLCompiler(Compiler):
 
             proj = Project(files=transform_result)
             fn = OpenCLCompiler.ConcreteSpecializedKernel(self.context, self.global_work_size, self.local_work_size)
-            func_types = [
-                        np.ctypeslib.ndpointer(arg.dtype, arg.ndim, arg.shape) if isinstance(arg, NDBuffer) else type(arg)
+            func_types = [cl.cl_command_queue, cl.cl_kernel] + [
+                        cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
                         for arg in program_config.args_subconfig.values()
                     ]
             return fn.finalize(
