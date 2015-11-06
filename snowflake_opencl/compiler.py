@@ -1,6 +1,7 @@
 import operator
 import ctypes
 import pycl as cl
+import numpy as np
 from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile
 from ctree.ocl.nodes import OclFile
 from ctree.templates.nodes import StringTemplate
@@ -21,6 +22,7 @@ class NDBuffer(object):
         self.ary = ary
         self.shape = ary.shape
         self.dtype = ary.dtype
+        self.ndim = ary.ndim
         self.buffer, evt = cl.buffer_from_ndarray(queue, ary)
         if blocking:
             evt.wait()
@@ -87,7 +89,7 @@ class OpenCLCompiler(Compiler):
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
-            source_code = project_node.files[1].codegen()
+            source_code = project_node.find(OclFile).codegen()
             self.kernel = cl.clCreateProgramWithSource(self.context, source_code).build()["stencil_kernel"]
             self._c_function = self._compile(entry_point_name, project_node, entry_point_typesig)
             self.entry_point_name = entry_point_name
@@ -172,13 +174,20 @@ class OpenCLCompiler(Compiler):
 
 
         def finalize(self, transform_result, program_config):
+
             proj = Project(files=transform_result)
             fn = OpenCLCompiler.ConcreteSpecializedKernel(self.context, self.global_work_size, self.local_work_size)
+            func_types = [
+                        np.ctypeslib.ndpointer(arg.dtype, arg.ndim, arg.shape) if isinstance(arg, NDBuffer) else type(arg)
+                        for arg in program_config.args_subconfig.values()
+                    ]
             return fn.finalize(
-                entry_point_name='stencil_kernel',  # not used
+                entry_point_name='stencil_control',  # not used
                 project_node=proj,
-                entry_point_typesig=None,
+                entry_point_typesig=ctypes.CFUNCTYPE(
+                    None, *func_types
                 )
+            )
 
     def _post_process(self, original, compiled, index_name, **kwargs):
         return self.LazySpecializedKernel(
