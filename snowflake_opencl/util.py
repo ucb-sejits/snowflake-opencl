@@ -60,51 +60,45 @@ def local_work_size(gws):
 
 
 
-def generate_control(name, global_size, local_size, kernel_params, kernels, other=None):
+def generate_control(name, global_size, local_size, kernel_params, kernel, other=None):
     # assumes that all kernels take the same arguments and that they all use the same global and local size!
     defn = []
     defn.append(ArrayDef(SymbolRef("global", ctypes.c_ulong()), 1, Array(body=[Constant(global_size)])))
     defn.append(ArrayDef(SymbolRef("local", ctypes.c_ulong()), 1, Array(body=[Constant(local_size)])))
     defn.append(Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0)))
-    for kernel in kernels:
-        kernel_name = kernel.find(FunctionDecl, kernel=True).name
-        for param, num in zip(kernel_params, range(len(kernel_params))):
-            if isinstance(param, ctypes.POINTER(ctypes.c_double)):
-                set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
-                                     [SymbolRef(kernel_name),
-                                      Constant(num),
-                                      FunctionCall(SymbolRef("sizeof"), [SymbolRef("cl_mem")]),
-                                      Ref(SymbolRef(param.name))])
-            else:
-                set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
-                                     [SymbolRef(kernel_name),
-                                      Constant(num),
-                                      Constant(ctypes.sizeof(param.type)),
-                                      Ref(SymbolRef(param.name))])
-            defn.append(set_arg)
-        enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
-            SymbolRef("queue"),
-            SymbolRef(kernel_name),
-            Constant(1),
-            NULL(),
-            SymbolRef("global"),
-            SymbolRef("local"),
-            Constant(0),
-            NULL(),
-            NULL()
-        ])
-        defn.append(enqueue_call)
+    # for kernel in kernels:
+    kernel_name = kernel.find(FunctionDecl, kernel=True).name
+    for param, num in zip(kernel_params, range(len(kernel_params))):
+        if isinstance(param, ctypes.POINTER(ctypes.c_double)):
+            set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
+                                 [SymbolRef(kernel_name),
+                                  Constant(num),
+                                  FunctionCall(SymbolRef("sizeof"), [SymbolRef("cl_mem")]),
+                                  Ref(SymbolRef(param.name))])
+        else:
+            set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
+                                 [SymbolRef(kernel_name),
+                                  Constant(num),
+                                  Constant(ctypes.sizeof(param.type)),
+                                  Ref(SymbolRef(param.name))])
+        defn.append(set_arg)
+    enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
+        SymbolRef("queue"), SymbolRef(kernel_name), Constant(1), NULL(),
+        SymbolRef("global"), SymbolRef("local"), Constant(0), NULL(), NULL()])
+    defn.append(enqueue_call)
     defn.append(StringTemplate("""clFinish(queue);"""))
     defn.append(Return(SymbolRef("error_code")))
-    params=[]
-    params.append(SymbolRef("queue", cl.cl_command_queue()))
-    for kernel in kernels:
-        params.append(SymbolRef(kernel.find(FunctionDecl, kernel=True).name, cl.cl_kernel()))
-    for param in kernel_params:
-        if isinstance(param.type, ctypes.POINTER(ctypes.c_double)):
-            params.append(SymbolRef(param.name, cl.cl_mem()))
-        else:
-            params.append(param)
+    params=[SymbolRef("queue", cl.cl_command_queue()),
+            SymbolRef(kernel.find(FunctionDecl, kernel=True).name, cl.cl_kernel())
+           ] + kernel_params
+    # params.append(SymbolRef("queue", cl.cl_command_queue()))
+    # for kernel in kernels:
+    #     params.append(SymbolRef(kernel.find(FunctionDecl, kernel=True).name, cl.cl_kernel()))
+    # for param in kernel_params:
+    #     if isinstance(param.type, ctypes.POINTER(ctypes.c_double)):
+    #         params.append(SymbolRef(param.name, cl.cl_mem()))
+    #     else:
+    #         params.append(param)
     func = FunctionDecl(ctypes.c_int(), name, params, defn)
     ocl_include = StringTemplate("""
             #include <stdio.h>

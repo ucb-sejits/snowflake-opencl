@@ -149,22 +149,25 @@ class OpenCLCompiler(Compiler):
 
             self.local_work_size = local_work_size(self.global_work_size)
 
-            params=[
+            kernel_params=[
                     SymbolRef(name=arg_name, sym_type=get_ctype(
                          arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack
                      ), _global=True) for arg_name, arg in subconfig.items()
                    ]
+            control_params=[
+                    SymbolRef(name=arg_name, sym_type=get_ctype(
+                         arg) if not isinstance(arg, NDBuffer) else cl.cl_mem() #hack
+                     ) for arg_name, arg in subconfig.items()
+                   ]
 
             kernel_func = FunctionDecl(name=SymbolRef("stencil_kernel"),  # 'kernel' is a keyword, embed specific name?
-                                       params=params,
+                                       params=kernel_params,
                                        defn=components)
             kernel_func.set_kernel()
             ocl_file = OclFile(body=includes + encode_funcs + [kernel_func])
 
-            # c_file = CFile(name="stencil_control", body=[], config_target='opencl')
-            # ???
-            c_file = generate_control("stencil_kernel", self.global_work_size, self.local_work_size, params, [kernel_func])
-            # print(ocl_file)
+            c_file = generate_control("stencil_control", self.global_work_size, self.local_work_size, control_params, kernel_func)
+            print(ocl_file)
             return [c_file, ocl_file]
 
 
