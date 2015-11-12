@@ -1,8 +1,10 @@
 import operator
 import ctypes
+from ctree.c.macros import NULL
 import pycl as cl
 import numpy as np
-from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile
+from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile, \
+    ArrayDef, Array, Ref, ArrayRef, Return
 from ctree.ocl.nodes import OclFile
 from ctree.templates.nodes import StringTemplate
 from ctree.types import get_ctype
@@ -15,7 +17,6 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 from snowflake_opencl.util import flattened_to_multi_index, global_work_size, local_work_size, generate_control
 
 __author__ = 'dorthyluu'
-
 
 class NDBuffer(object):
     def __init__(self, queue, ary, blocking=True):
@@ -52,7 +53,7 @@ class OpenCLCompiler(Compiler):
                 strides = space[2]
                 work_dims = []
 
-                for dim, (high, low, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
+                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
                     work_dims.append((high - low + stride - 1) / stride)
 
                 total_work_dims.append(tuple(work_dims))
@@ -80,34 +81,25 @@ class OpenCLCompiler(Compiler):
             return MultiNode(parts)
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size):
+        def __init__(self, context, global_work_size, local_work_size, kernels):
             self.context = context
             self.gws = global_work_size
             self.lws = local_work_size
-            self.kernel = None
+            self.kernels = kernels
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
-            source_code = project_node.find(OclFile).codegen()
-            self.kernel = cl.clCreateProgramWithSource(self.context, source_code).build()["stencil_kernel"]
             self._c_function = self._compile(entry_point_name, project_node, entry_point_typesig)
             self.entry_point_name = entry_point_name
             return self
 
         def __call__(self, *args, **kwargs):
             queue = cl.clCreateCommandQueue(self.context)
-            true_args = [queue, self.kernel] + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
+            true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
             return self._c_function(*true_args)
 
-            # events = []
-            # for kernel in self.kernels:
-            #     # run_evt = kernel.kernel(*kernel_args).on(self.queue, gsize=kernel.gsize, lsize=kernel.lsize)
-            #     run_evt = kernel(*true_args).on(queue, gsize=self.gws, lsize=self.lws)
-            #     events.append(run_evt)
-            # cl.clWaitForEvents(*events)
-
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
-        def __init__(self, py_ast=None, names=None, target_names=('out',), index_name='index',
+        def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
                      _hash=None, context=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
@@ -119,6 +111,7 @@ class OpenCLCompiler(Compiler):
                 py_ast, names, target_names, index_name, _hash
             )
 
+            self.snowflake_ast = original
             self.parent_cls = OpenCLCompiler
             self.context = context
             self.global_work_size = 0
@@ -139,49 +132,97 @@ class OpenCLCompiler(Compiler):
             includes = []
             includes.append(StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable"))  # should add this to ctree
 
-            components = []
-            # is there a one to one mapping between targets and IterationSpace nodes?
-            for target, ispace in zip(self.target_names, c_tree.body):
+            ocl_files, kernels = [], []
+            control = [Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0))]
+            gws_arrays, lws_arrays = {}, {}
+            for i, (target, ispace, stencil_node) in enumerate(zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
+
+                # build kernel
                 shape = subconfig[target].shape
-                self.global_work_size = global_work_size(shape, ispace)  # should only do once
                 sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(ispace)
                 sub = self.parent_cls.BlockConverter().visit(sub) # changes node to MultiNode
-                components.append(sub)
-
-            self.local_work_size = local_work_size(self.global_work_size)
-
-            kernel_params=[
+                kernel_params=[
                     SymbolRef(name=arg_name, sym_type=get_ctype(
                          arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack
                      ), _global=True) for arg_name, arg in subconfig.items()
                    ]
-            control_params=[
+                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i),
+                                               params=kernel_params,
+                                               defn=[sub])
+                kernel_func.set_kernel()
+                kernels.append(kernel_func)
+                ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
+
+                # declare new global and local work size arrays if necessary
+                gws = global_work_size(shape, ispace)
+                if gws not in gws_arrays:
+                    control.append(ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
+                    gws_arrays[gws] = SymbolRef("global_%d" % gws)
+                lws = local_work_size(gws)
+                if lws not in lws_arrays:
+                    control.append(ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))
+                    lws_arrays[lws] = SymbolRef("local_%d" % lws)
+
+                # clSetKernelArg
+                for arg_num, arg in enumerate(kernel_func.params):
+                    set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
+                                     [SymbolRef(kernel_func.name.name),
+                                      Constant(arg_num),
+                                      Constant(ctypes.sizeof(cl.cl_mem)),
+                                      Ref(SymbolRef(arg.name))])
+                    control.append(set_arg)
+
+                # clEnqueueNDRangeKernel
+                control.append(FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
+                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
+                                   gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
+                               ]))
+
+
+            control.append(StringTemplate("""clFinish(queue);"""))
+            control.append(Return(SymbolRef("error_code")))
+            # should do bit or assign for error code
+
+            control_params= []
+            control_params.append(SymbolRef("queue", cl.cl_command_queue()))
+            for kernel_func in kernels:
+                control_params.append(SymbolRef(kernel_func.name.name, cl.cl_kernel()))
+            control_params.extend([
                     SymbolRef(name=arg_name, sym_type=get_ctype(
                          arg) if not isinstance(arg, NDBuffer) else cl.cl_mem() #hack
                      ) for arg_name, arg in subconfig.items()
-                   ]
+                   ])
 
-            kernel_func = FunctionDecl(name=SymbolRef("stencil_kernel"),  # 'kernel' is a keyword, embed specific name?
-                                       params=kernel_params,
-                                       defn=components)
-            kernel_func.set_kernel()
-            ocl_file = OclFile(body=includes + encode_funcs + [kernel_func])
+            control = FunctionDecl(return_type=ctypes.c_int(), name="control", params=control_params, defn=control)
+            ocl_include = StringTemplate("""
+                            #include <stdio.h>
+                            #include <time.h>
+                            #ifdef __APPLE__
+                            #include <OpenCL/opencl.h>
+                            #else
+                            #include <CL/cl.h>
+                            #endif
+                            """)
 
-            c_file = generate_control("stencil_control", self.global_work_size, self.local_work_size, control_params, kernel_func)
-            print(ocl_file)
-            return [c_file, ocl_file]
+            c_file = CFile(name="control", body=[ocl_include, control], config_target='opencl')
+            # print(c_file)
+            # print(f for f in ocl_files)
+            return [c_file] + ocl_files
 
 
         def finalize(self, transform_result, program_config):
 
             proj = Project(files=transform_result)
-            fn = OpenCLCompiler.ConcreteSpecializedKernel(self.context, self.global_work_size, self.local_work_size)
-            func_types = [cl.cl_command_queue, cl.cl_kernel] + [
+            kernels = []
+            for i, f in enumerate(transform_result[1:]):
+                kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" %i])
+            fn = OpenCLCompiler.ConcreteSpecializedKernel(self.context, self.global_work_size, self.local_work_size, kernels)
+            func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
                         cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
                         for arg in program_config.args_subconfig.values()
                     ]
             return fn.finalize(
-                entry_point_name='stencil_control',  # not used
+                entry_point_name='control',  # not used
                 project_node=proj,
                 entry_point_typesig=ctypes.CFUNCTYPE(
                     None, *func_types
@@ -191,11 +232,10 @@ class OpenCLCompiler(Compiler):
     def _post_process(self, original, compiled, index_name, **kwargs):
         return self.LazySpecializedKernel(
             py_ast=compiled,
+            original=original,
             names=find_names(original),
             index_name=index_name,
             target_names=[stencil.primary_mesh for stencil in original.body if hasattr(stencil, "primary_mesh")],
             _hash=hash(original),
             context=self.context
         )
-
-
