@@ -43,7 +43,7 @@ def global_work_size(array_shape, iteration_space):
         highs = tuple(make_high(high, dim) for dim, high in enumerate(space[1]))
         strides = space[2]
         size = 1
-        for dim, (high, low, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
+        for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
             size *= (high - low + stride - 1) / stride
         gws.append(size)
 

@@ -209,7 +209,7 @@ class OpenCLCompiler(Compiler):
                             """)
 
             c_file = CFile(name="control", body=[ocl_include, control], config_target='opencl')
-            print(c_file)
+            # print(c_file)
             # print(f for f in ocl_files)
             return [c_file] + ocl_files
 
