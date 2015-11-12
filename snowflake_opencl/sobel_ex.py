@@ -25,7 +25,8 @@ sobel_total = Stencil(sobel_x_component * sobel_x_component + sobel_y_component 
 
 compiler = OpenCLCompiler(ctx)
 sobel_ocl = compiler.compile(sobel_total)
-sobel_ocl(out_buf, in_buf)
+error = sobel_ocl(out_buf, in_buf)
+print("error code %d" % error)
 
 lena_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, lena_out)
 out_evt.wait()

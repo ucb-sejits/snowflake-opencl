@@ -4,7 +4,7 @@ from ctree.c.macros import NULL
 import pycl as cl
 import numpy as np
 from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile, \
-    ArrayDef, Array, Ref, ArrayRef, Return
+    ArrayDef, Array, Ref, ArrayRef, Return, BitOrAssign
 from ctree.ocl.nodes import OclFile
 from ctree.templates.nodes import StringTemplate
 from ctree.types import get_ctype
@@ -134,6 +134,7 @@ class OpenCLCompiler(Compiler):
 
             ocl_files, kernels = [], []
             control = [Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0))]
+            error_code = SymbolRef("error_code")
             gws_arrays, lws_arrays = {}, {}
             for i, (target, ispace, stencil_node) in enumerate(zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
@@ -170,13 +171,14 @@ class OpenCLCompiler(Compiler):
                                       Constant(arg_num),
                                       Constant(ctypes.sizeof(cl.cl_mem)),
                                       Ref(SymbolRef(arg.name))])
-                    control.append(set_arg)
+                    control.append(BitOrAssign(error_code, set_arg))
 
                 # clEnqueueNDRangeKernel
-                control.append(FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
+                enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
                                    SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
                                    gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
-                               ]))
+                               ])
+                control.append(BitOrAssign(error_code, enqueue_call))
 
 
             control.append(StringTemplate("""clFinish(queue);"""))
