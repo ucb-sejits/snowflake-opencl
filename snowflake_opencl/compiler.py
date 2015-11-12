@@ -96,6 +96,7 @@ class OpenCLCompiler(Compiler):
         def __call__(self, *args, **kwargs):
             queue = cl.clCreateCommandQueue(self.context)
             true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
+            # this returns None instead of an int...
             return self._c_function(*true_args)
 
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
@@ -182,6 +183,7 @@ class OpenCLCompiler(Compiler):
 
 
             control.append(StringTemplate("""clFinish(queue);"""))
+            control.append(StringTemplate("printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
 
@@ -195,7 +197,7 @@ class OpenCLCompiler(Compiler):
                      ) for arg_name, arg in subconfig.items()
                    ])
 
-            control = FunctionDecl(return_type=ctypes.c_int(), name="control", params=control_params, defn=control)
+            control = FunctionDecl(return_type=ctypes.c_int32(), name="control", params=control_params, defn=control)
             ocl_include = StringTemplate("""
                             #include <stdio.h>
                             #include <time.h>
@@ -207,7 +209,7 @@ class OpenCLCompiler(Compiler):
                             """)
 
             c_file = CFile(name="control", body=[ocl_include, control], config_target='opencl')
-            # print(c_file)
+            print(c_file)
             # print(f for f in ocl_files)
             return [c_file] + ocl_files
 
