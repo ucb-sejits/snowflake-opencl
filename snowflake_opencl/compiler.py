@@ -180,10 +180,11 @@ class OpenCLCompiler(Compiler):
                                    gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
                                ])
                 control.append(BitOrAssign(error_code, enqueue_call))
+                control.append(StringTemplate("""clFinish(queue);"""))
 
 
             control.append(StringTemplate("""clFinish(queue);"""))
-            control.append(StringTemplate("printf(\"error code %d\\n\", error_code);"))
+            control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
 
