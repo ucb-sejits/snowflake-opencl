@@ -88,10 +88,10 @@ class OpenCLCompiler(Compiler):
             return MultiNode(parts)
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, work_size_global, work_size_local, kernels):
+        def __init__(self, context, global_work_size, local_work_size, kernels):
             self.context = context
-            self.gws = work_size_global
-            self.lws = work_size_local
+            self.gws = global_work_size
+            self.lws = local_work_size
             self.kernels = kernels
             self._c_function = None
             self.entry_point_name = None
