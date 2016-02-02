@@ -54,7 +54,7 @@ class TestSimpleStencils(unittest.TestCase):
         l = np.random.random((1024, 1024))
         lena_out = np.zeros_like(l)
 
-        device = cl.clGetDeviceIDs()[0]
+        device = cl.clGetDeviceIDs()[1]
         ctx = cl.clCreateContext(devices=[device])
         queue = cl.clCreateCommandQueue(ctx)
 
@@ -74,5 +74,56 @@ class TestSimpleStencils(unittest.TestCase):
 
         lena_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, lena_out)
         print(lena_out)
+        out_evt.wait()
+        print("done")
+
+    def test_3d_jacobi(self):
+        buffer_in = np.random.random((128, 128, 128))
+        # for j, x in enumerate(buffer_in):
+        #     for i, y in enumerate(x):
+        #         for k, _ in enumerate(y):
+        #             buffer_in[i, j, k] = i * j * k
+
+        buffer_out = np.zeros_like(buffer_in)
+
+        device = cl.clGetDeviceIDs()[-1]
+        ctx = cl.clCreateContext(devices=[device])
+        queue = cl.clCreateCommandQueue(ctx)
+
+        in_buf = NDBuffer(queue, buffer_in)
+        out_buf = NDBuffer(queue, buffer_out)
+
+        sc = StencilComponent(
+            'buffer',
+            WeightArray([
+                [
+                    [0, 0, 0],
+                    [0, 1, 0],
+                    [0, 0, 0],
+                ],
+                [
+                    [0, 1, 0],
+                    [1, 6, 1],
+                    [0, 1, 0],
+                ],
+                [
+                    [0, 0, 0],
+                    [0, 1, 0],
+                    [0, 0, 0],
+                ],
+            ])
+        )
+
+        jacobi_stencil = Stencil(sc, 'out', ((1, -1, 1),) * 3, primary_mesh='out')
+
+        compiler = OpenCLCompiler(ctx)
+        jacobi_operator = compiler.compile(jacobi_stencil)
+        jacobi_operator(out_buf, in_buf)
+
+        buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
+        print("Input " + "=" * 80)
+        print(buffer_in)
+        print("Output" + "=" * 80)
+        print(buffer_out)
         out_evt.wait()
         print("done")

@@ -1,22 +1,24 @@
-import operator
 import ctypes
-from ctree.c.macros import NULL
+
 import pycl as cl
-import numpy as np
-from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, Div, Add, Mod, Mul, FunctionDecl, MultiNode, CFile, \
-    ArrayDef, Array, Ref, ArrayRef, Return, BitOrAssign
+from ctree.c.macros import NULL
+from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, FunctionDecl, MultiNode, CFile, \
+    ArrayDef, Array, Ref, Return, BitOrAssign
+from ctree.jit import ConcreteSpecializedFunction
+from ctree.nodes import Project
 from ctree.ocl.nodes import OclFile
 from ctree.templates.nodes import StringTemplate
-from ctree.types import get_ctype
 from ctree.transformations import PyBasicConversions
-from ctree.jit import ConcreteSpecializedFunction, LazySpecializedFunction
-from ctree.nodes import Project
+from ctree.types import get_ctype
+# noinspection PyProtectedMember
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-from snowflake_opencl.util import flattened_to_multi_index, global_work_size, local_work_size, generate_control
 
-__author__ = 'dorthyluu'
+from snowflake_opencl.util import flattened_to_multi_index, global_work_size, local_work_size
+
+__author__ = 'dorthy luu'
+
 
 class NDBuffer(object):
     def __init__(self, queue, ary, blocking=True):
@@ -42,8 +44,14 @@ class OpenCLCompiler(Compiler):
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
 
-            make_low = lambda low, dim: low if low >= 0 else self.reference_array_shape[dim] + low
-            make_high = lambda high, dim: high if high > 0 else self.reference_array_shape[dim] + high
+            def make_low(floor, dimension):
+                return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
+
+            def make_high(ceiling, dimension):
+                return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
+
+            # make_low = lambda low, dim: low if low >= 0 else self.reference_array_shape[dim] + low
+            # make_high = lambda high, dim: high if high > 0 else self.reference_array_shape[dim] + high
 
             total_work_dims, total_strides, total_lows = [], [], []
 
@@ -60,10 +68,9 @@ class OpenCLCompiler(Compiler):
                 total_strides.append(strides)
                 total_lows.append(lows)
 
-            parts = []
             # get_global_id(0)
-            parts.append(Assign(SymbolRef("global_id", ctypes.c_ulong()),
-                                FunctionCall(SymbolRef("get_global_id"), [Constant(0)])))
+            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
+                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
             # initialize index variables
             parts.extend(
                 SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
@@ -81,11 +88,13 @@ class OpenCLCompiler(Compiler):
             return MultiNode(parts)
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size, kernels):
+        def __init__(self, context, work_size_global, work_size_local, kernels):
             self.context = context
-            self.gws = global_work_size
-            self.lws = local_work_size
+            self.gws = work_size_global
+            self.lws = work_size_local
             self.kernels = kernels
+            self._c_function = None
+            self.entry_point_name = None
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
@@ -99,6 +108,7 @@ class OpenCLCompiler(Compiler):
             # this returns None instead of an int...
             return self._c_function(*true_args)
 
+    # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
                      _hash=None, context=None):
@@ -128,50 +138,51 @@ class OpenCLCompiler(Compiler):
 
             encode_funcs = []
             for shape in shapes:
+                # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
 
-            includes = []
-            includes.append(StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable"))  # should add this to ctree
+            includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
 
             ocl_files, kernels = [], []
             control = [Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0))]
             error_code = SymbolRef("error_code")
             gws_arrays, lws_arrays = {}, {}
-            for i, (target, ispace, stencil_node) in enumerate(zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
+            for i, (target, i_space, stencil_node) in enumerate(
+                    zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
                 # build kernel
                 shape = subconfig[target].shape
-                sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(ispace)
-                sub = self.parent_cls.BlockConverter().visit(sub) # changes node to MultiNode
-                kernel_params=[
+                sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
+                sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
+                kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
-                         arg if not isinstance(arg, NDBuffer) else arg.ary.ravel() #hack
+                         arg if not isinstance(arg, NDBuffer) else arg.ary.ravel()  # hack
                      ), _global=True) for arg_name, arg in subconfig.items()
                    ]
-                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i),
-                                               params=kernel_params,
-                                               defn=[sub])
+                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i), params=kernel_params, defn=[sub])
                 kernel_func.set_kernel()
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
                 # declare new global and local work size arrays if necessary
-                gws = global_work_size(shape, ispace)
+                gws = global_work_size(shape, i_space)
                 if gws not in gws_arrays:
-                    control.append(ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
+                    control.append(
+                        ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
                     gws_arrays[gws] = SymbolRef("global_%d" % gws)
                 lws = local_work_size(gws)
                 if lws not in lws_arrays:
-                    control.append(ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))
+                    control.append(
+                        ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))
                     lws_arrays[lws] = SymbolRef("local_%d" % lws)
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
                     set_arg = FunctionCall(SymbolRef("clSetKernelArg"),
-                                     [SymbolRef(kernel_func.name.name),
-                                      Constant(arg_num),
-                                      Constant(ctypes.sizeof(cl.cl_mem)),
-                                      Ref(SymbolRef(arg.name))])
+                                           [SymbolRef(kernel_func.name.name),
+                                            Constant(arg_num),
+                                            Constant(ctypes.sizeof(cl.cl_mem)),
+                                            Ref(SymbolRef(arg.name))])
                     control.append(BitOrAssign(error_code, set_arg))
 
                 # clEnqueueNDRangeKernel
@@ -182,19 +193,17 @@ class OpenCLCompiler(Compiler):
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
 
-
             control.append(StringTemplate("""clFinish(queue);"""))
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
 
-            control_params= []
-            control_params.append(SymbolRef("queue", cl.cl_command_queue()))
+            control_params = [SymbolRef("queue", cl.cl_command_queue())]
             for kernel_func in kernels:
                 control_params.append(SymbolRef(kernel_func.name.name, cl.cl_kernel()))
             control_params.extend([
                     SymbolRef(name=arg_name, sym_type=get_ctype(
-                         arg) if not isinstance(arg, NDBuffer) else cl.cl_mem() #hack
+                         arg) if not isinstance(arg, NDBuffer) else cl.cl_mem()  # hack
                      ) for arg_name, arg in subconfig.items()
                    ])
 
@@ -214,21 +223,21 @@ class OpenCLCompiler(Compiler):
             # print(f for f in ocl_files)
             return [c_file] + ocl_files
 
-
         def finalize(self, transform_result, program_config):
 
-            proj = Project(files=transform_result)
+            project = Project(files=transform_result)
             kernels = []
             for i, f in enumerate(transform_result[1:]):
-                kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" %i])
-            fn = OpenCLCompiler.ConcreteSpecializedKernel(self.context, self.global_work_size, self.local_work_size, kernels)
+                kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" % i])
+            fn = OpenCLCompiler.ConcreteSpecializedKernel(
+                self.context, self.global_work_size, self.local_work_size, kernels)
             func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
                         cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
                         for arg in program_config.args_subconfig.values()
                     ]
             return fn.finalize(
                 entry_point_name='control',  # not used
-                project_node=proj,
+                project_node=project,
                 entry_point_typesig=ctypes.CFUNCTYPE(
                     None, *func_types
                 )
