@@ -10,11 +10,14 @@ setup(
     description='OpenCL compiler for snowflake',
 
     packages=[
-        'snowflake_opencl'
+        'snowflake_opencl',
+        'test',
     ],
 
     install_requires=[
         'ctree',
-        'snowflake'
+        'snowflake',
+        'numpy',
+        'pycl',
     ]
 )
