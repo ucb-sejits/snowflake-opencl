@@ -24,7 +24,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("buffer_in  is {}".format(buffer_in))
         buffer_out = np.zeros_like(buffer_in)
 
-        device = cl.clGetDeviceIDs()[0]
+        device = cl.clGetDeviceIDs()[-1]
         ctx = cl.clCreateContext(devices=[device])
         queue = cl.clCreateCommandQueue(ctx)
 
@@ -53,6 +53,9 @@ class TestSimpleStencils(unittest.TestCase):
     def test_sobel(self):
         l = np.random.random((1024, 1024))
         lena_out = np.zeros_like(l)
+
+        import logging
+        logging.basicConfig(level=20)
 
         device = cl.clGetDeviceIDs()[1]
         ctx = cl.clCreateContext(devices=[device])
@@ -103,7 +106,7 @@ class TestSimpleStencils(unittest.TestCase):
                 ],
                 [
                     [0, 1, 0],
-                    [1, 6, 1],
+                    [1, -6, 1],
                     [0, 1, 0],
                 ],
                 [

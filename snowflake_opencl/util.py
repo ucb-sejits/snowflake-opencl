@@ -16,7 +16,7 @@ def flattened_to_multi_index(flattened_id_symbol, shape, multipliers=None, offse
     body = []
     ndim = len(shape)
     full_size = reduce(operator.mul, shape, 1)
-    for i in range(ndim):
+    for i in reversed(range(ndim)):
         stmt = flattened_id_symbol
         mod_size = reduce(operator.mul, shape[i:], 1)
         div_size = reduce(operator.mul, shape[(i + 1):], 1)
