@@ -79,7 +79,7 @@ class OpenCLCompiler(Compiler):
             # calculate each index inline
             for space in range(len(node.space.spaces)):
                 indices = flattened_to_multi_index(SymbolRef("global_id"),
-                                                   total_work_dims[space],
+                                                   self.reference_array_shape,
                                                    total_strides[space],
                                                    total_lows[space])
                 for dim in range(len(self.reference_array_shape)):
@@ -154,11 +154,11 @@ class OpenCLCompiler(Compiler):
                 shape = subconfig[target].shape
                 sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
-                # sub.body.append(
-                #     StringTemplate('printf("i0 %d, i1 %d, dst %d src0 %d src1 %d\\n"' +
-                #                    ', index_0, index_1, encode6_6(index_0, index_1),' +
-                #                    ' encode6_6(index_0 + 2, index_1 + 0),' +
-                #                    ' encode6_6(index_0 + 1, index_1 + 0) );'))
+                sub.body.append(
+                    StringTemplate('printf("gid %d i0 %d, i1 %d, dst %d src0 %d src1 %d\\n"' +
+                                   ', global_id, index_0, index_1, encode6_6(index_0, index_1),' +
+                                   ' encode6_6(index_0 + 2, index_1 + 0),' +
+                                   ' encode6_6(index_0 + 1, index_1 + 0) );'))
                 # sub.body.append(
                 #     StringTemplate('printf("i0 %d, i1 %d, dst %f src0 %f src1 %f\\n"' +
                 #                    ', index_0, index_1, mesh[encode6_6(index_0, index_1)],' +

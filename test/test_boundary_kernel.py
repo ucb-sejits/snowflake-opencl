@@ -2,9 +2,8 @@ from __future__ import print_function
 import unittest
 import numpy as np
 import pycl as cl
-import inspect
 
-from snowflake.nodes import StencilComponent, WeightArray, Stencil, SparseWeightArray
+from snowflake.nodes import StencilComponent, Stencil, SparseWeightArray
 
 from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
 
@@ -61,51 +60,51 @@ class TestBoundaryStencils(unittest.TestCase):
         import logging
         logging.basicConfig(level=20)
 
-        buffer = np.zeros([size, size], dtype=np.float32)
+        mesh = np.zeros([size, size], dtype=np.float32)
         count = 0
         for i in range(size):
             for j in range(size):
-                buffer[i, j] = count
+                mesh[i, j] = count
                 count += 1
 
         for i in range(size-1, -1, -1):
             for j in range(size):
-                print(" {:5d}".format(int(buffer[i, j])), end="")
+                print(" {:5d}".format(int(mesh[i, j])), end="")
             print()
 
         device = cl.clGetDeviceIDs()[-1]
         ctx = cl.clCreateContext(devices=[device])
         queue = cl.clCreateCommandQueue(ctx)
 
-        in_buf = NDBuffer(queue, buffer)
+        in_buf = NDBuffer(queue, mesh)
 
         boundary_component = StencilComponent(
             'mesh',
             SparseWeightArray({
-                (1, 0): 100.0,
-                (2, 0): 1.0,
+                (-1, 0): 100.0,
+                (-2, 0): 1.0,
             })
         )
         boundary_stencil = Stencil(
             boundary_component,
             'mesh',
-            ((0, 1, 1), (0, size, 1)))
+            ((size-1, size, 1), (1, size-1, 1)))
 
         compiler = OpenCLCompiler(ctx)
         sobel_ocl = compiler.compile(boundary_stencil)
         sobel_ocl(in_buf)
         print(sobel_ocl.arg_spec)
 
-        buffer, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, buffer)
+        mesh, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, mesh)
 
         out_evt.wait()
 
         for i in range(size-1, -1, -1):
             for j in range(size):
-                print(" {:5d}".format(int(buffer[i, j])), end="")
+                print(" {:5d}".format(int(mesh[i, j])), end="")
             print()
         print("\n\n")
-        buf2 = buffer.reshape((size**2,))
+        buf2 = mesh.reshape((size**2,))
         for i in range(len(buf2)):
             print(" {:4d}".format(i), end="")
         print()
