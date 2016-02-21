@@ -31,8 +31,8 @@ class TestBoundaryStencils(unittest.TestCase):
         boundary_component = StencilComponent(
             'mesh',
             SparseWeightArray({
-                (1, 0, 0): 100.0,
-                (2, 0, 0): 1.0,
+                (-1, 0, 0): 100.0,
+                (-2, 0, 0): 1.0,
             })
         )
         boundary_stencil = Stencil(
