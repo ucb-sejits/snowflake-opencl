@@ -15,44 +15,43 @@ class TestBoundaryStencils(unittest.TestCase):
     def test_v2_3d_face_kernel(self):
         size = 4
 
-        buffer = np.zeros([size, size, size])
+        mesh = np.zeros([size, size, size], dtype=np.float32)
         for i in range(1, size - 1):
             for j in range(1, size - 1):
                 for k in range(1, size - 1):
-                    buffer[i, j, k] = 1.0
+                    mesh[i, j, k] = 1.0
 
-        print("buffer_in  is {}".format(buffer))
+        print("buffer_in  is {}".format(mesh))
 
         device = cl.clGetDeviceIDs()[-1]
         ctx = cl.clCreateContext(devices=[device])
         queue = cl.clCreateCommandQueue(ctx)
 
-        in_buf = NDBuffer(queue, buffer)
-        out_buf = NDBuffer(queue, buffer)
+        in_buf = NDBuffer(queue, mesh)
 
         boundary_component = StencilComponent(
             'mesh',
             SparseWeightArray({
-                (1, 0, 0): -5.0/2,
-                (2, 0, 0): 1.0/2,
+                (1, 0, 0): 100.0,
+                (2, 0, 0): 1.0,
             })
         )
         boundary_stencil = Stencil(
             boundary_component,
             'mesh',
-            ((0, 1, 1), (0, 4, 1), (0, 4, 1)))
+            ((size-1, size, 1), (0, size, 1), (0, size, 1)))
 
         compiler = OpenCLCompiler(ctx)
         sobel_ocl = compiler.compile(boundary_stencil)
         sobel_ocl(in_buf)
         print(sobel_ocl.arg_spec)
 
-        buffer, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, buffer)
+        mesh, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, mesh)
 
         out_evt.wait()
 
-        print("buffer out {}".format(buffer))
-        print("linear {}".format(buffer.reshape((4**3,))))
+        print("buffer out {}".format(mesh))
+        print("linear {}".format(mesh.reshape((size**3,))))
 
         print("done")
 
@@ -90,7 +89,7 @@ class TestBoundaryStencils(unittest.TestCase):
         boundary_stencil = Stencil(
             boundary_component,
             'mesh',
-            ((size, size+1, 1), (1, size+1, 1)))
+            ((0, 1, 1), (0, size, 1)))
 
         compiler = OpenCLCompiler(ctx)
         sobel_ocl = compiler.compile(boundary_stencil)
