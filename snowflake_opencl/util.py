@@ -42,9 +42,9 @@ def global_work_size(array_shape, iteration_space):
         return ceiling if ceiling > 0 else array_shape[dimension] + ceiling
 
     for space in iteration_space.space.spaces:
-        lows = tuple(make_low(low, dim) for dim, low in enumerate(space[0]))
-        highs = tuple(make_high(high, dim) for dim, high in enumerate(space[1]))
-        strides = space[2]
+        lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
+        highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+        strides = space.stride
         size = 1
         for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
             size *= (high - low + stride - 1) / stride

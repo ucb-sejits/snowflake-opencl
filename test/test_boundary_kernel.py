@@ -59,7 +59,10 @@ class TestBoundaryStencils(unittest.TestCase):
     def test_v2_2d_face_kernel(self):
         size = 6
 
-        buffer = np.zeros([size, size])
+        import logging
+        logging.basicConfig(level=20)
+
+        buffer = np.zeros([size, size], dtype=np.float32)
         count = 0
         for i in range(size):
             for j in range(size):
@@ -81,13 +84,13 @@ class TestBoundaryStencils(unittest.TestCase):
             'mesh',
             SparseWeightArray({
                 (1, 0): 100.0,
-                (2, 0): 10.0,
+                (2, 0): 1.0,
             })
         )
         boundary_stencil = Stencil(
             boundary_component,
             'mesh',
-            ((0, 1, 1), (1, 3, 1)))
+            ((size, size+1, 1), (1, size+1, 1)))
 
         compiler = OpenCLCompiler(ctx)
         sobel_ocl = compiler.compile(boundary_stencil)
@@ -103,7 +106,7 @@ class TestBoundaryStencils(unittest.TestCase):
                 print(" {:5d}".format(int(buffer[i, j])), end="")
             print()
         print("\n\n")
-        buf2 = buffer.reshape((4**2,))
+        buf2 = buffer.reshape((size**2,))
         for i in range(len(buf2)):
             print(" {:4d}".format(i), end="")
         print()
