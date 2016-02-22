@@ -80,19 +80,23 @@ class TestBoundaryStencils(unittest.TestCase):
 
         compiler = OpenCLCompiler(ctx)
 
+        # for face_number in [0]:  # range(4):
+        # for face_number in [1]:  # range(4):
+        # for face_number in [2]:  # range(4):
+        # for face_number in [3]:  # range(4):
         for face_number in range(4):
-            if face_number == 0:
-                offset1, offset2 = (1, 0), (2, 0)
-                iter_space1, iter_space2 = (0, 1, 1), (1, size - 1, 1)
+            offset1, offset2 = (1, 0), (2, 0)
+            iter_space1, iter_space2 = (0, 1, 1), (1, size - 1, 1)
+
             if face_number == 1:
                 offset1, offset2 = (0, 1), (0, 2)
                 iter_space1, iter_space2 = (1, size - 1, 1), (0, 1, 1)
             if face_number == 2:
                 offset1, offset2 = (-1, 0), (-2, 0)
                 iter_space1, iter_space2 = (size-1, size, 1), (1, size - 1, 1)
-            if face_number == 4:
+            if face_number == 3:
                 offset1, offset2 = (0, -1), (0, -2)
-                iter_space1, iter_space2 = (1, size - 1, 1), (1, size - 1, 1)
+                iter_space1, iter_space2 = (1, size - 1, 1), (size-1, size, 1)
 
             boundary_component = StencilComponent(
                 'mesh',

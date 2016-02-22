@@ -13,5 +13,6 @@ class Test2dFlattening(unittest.TestCase):
         SymbolRef("index0"),
         flattened_to_multi_index("global_id", shape=(0, 1), multipliers=(1, 1), offsets=(0, 1))
     )
+    print("assigns  {}".format(assigns.codegen()))
 
 

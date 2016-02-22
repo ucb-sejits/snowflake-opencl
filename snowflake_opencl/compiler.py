@@ -79,9 +79,9 @@ class OpenCLCompiler(Compiler):
             # calculate each index inline
             for space in range(len(node.space.spaces)):
                 indices = flattened_to_multi_index(SymbolRef("global_id"),
-                                                   self.reference_array_shape,
-                                                   total_strides[space],
-                                                   total_lows[space])
+                                                   shape=node.space.spaces[space].high - node.space.spaces[space].low,
+                                                   multipliers=total_strides[space],
+                                                   offsets=total_lows[space])
                 for dim in range(len(self.reference_array_shape)):
                     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
                 parts.extend(node.body)
