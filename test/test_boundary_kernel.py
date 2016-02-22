@@ -30,22 +30,30 @@ class TestBoundaryStencils(unittest.TestCase):
 
         in_buf = NDBuffer(queue, mesh)
 
-        boundary_component = StencilComponent(
-            'mesh',
-            SparseWeightArray({
-                (-1, 0, 0): 100.0,
-                (-2, 0, 0): 1.0,
-            })
-        )
-        boundary_stencil = Stencil(
-            boundary_component,
-            'mesh',
-            ((size-1, size, 1), (0, size, 1), (0, size, 1)))
+        for dim in range(3):
+            for side in ['lo', 'hi']:
+                (offset1, offset2) = (1, 2) if side == 'lo' else (-1, -2)
+                vector1 = tuple(offset1 if i == dim else 0 for i in range(3))
+                vector2 = tuple(offset2 if i == dim else 0 for i in range(3))
+                boundary_component = StencilComponent(
+                    'mesh',
+                    SparseWeightArray({
+                        vector1: 100.0,
+                        vector2: 1.0,
+                    })
+                )
+                face_iteration = (0, 1, 1) if side == 'lo' else (size-1, size, 1)
+                sub_space = tuple(
+                    face_iteration if i == dim else (1, size-1, 1)
+                    for i in range(3))
+                boundary_stencil = Stencil(
+                    boundary_component,
+                    'mesh',
+                    sub_space)
 
-        compiler = OpenCLCompiler(ctx)
-        sobel_ocl = compiler.compile(boundary_stencil)
-        sobel_ocl(in_buf)
-        print(sobel_ocl.arg_spec)
+                compiler = OpenCLCompiler(ctx)
+                sobel_ocl = compiler.compile(boundary_stencil)
+                sobel_ocl(in_buf)
 
         mesh, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, mesh)
 
@@ -54,6 +62,34 @@ class TestBoundaryStencils(unittest.TestCase):
         print("buffer out {}".format(mesh))
         # print("linear {}".format(mesh.reshape((size**3,))))
 
+        expected = [
+            [
+                [   0.,    0.,    0.,    0.],
+                [   0.,  105.,  206.,    0.],
+                [   0.,  307.,  408.,    0.],
+                [   0.,    0.,    0.,    0.],
+            ],
+
+            [
+                [   0.,  103.,  204.,    0.],
+                [ 102.,    1.,    2.,  201.],
+                [ 304.,    3.,    4.,  403.],
+                [   0.,  301.,  402.,    0.],],
+
+            [
+                [   0.,  507.,  608.,    0.],
+                [ 506.,    5.,    6.,  605.],
+                [ 708.,    7.,    8.,  807.],
+                [   0.,  705.,  806.,    0.],],
+
+            [
+                [   0.,    0.,    0.,    0.],
+                [   0.,  501.,  602.,    0.],
+                [   0.,  703.,  804.,    0.],
+                [   0.,    0.,    0.,    0.],],
+        ]
+
+        np.testing.assert_array_almost_equal(expected, mesh)
         print("done")
 
     def test_v2_2d_face_kernel(self):
