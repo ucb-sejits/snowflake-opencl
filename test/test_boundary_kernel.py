@@ -11,6 +11,10 @@ __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
 
 class TestBoundaryStencils(unittest.TestCase):
+    """
+    Demonstrate the generation of opencl kernels that cover the faces of a 2d and a 3d
+    space
+    """
     def test_v2_3d_face_kernel(self):
         size = 4
 
@@ -118,10 +122,6 @@ class TestBoundaryStencils(unittest.TestCase):
 
         compiler = OpenCLCompiler(ctx)
 
-        # for face_number in [0]:  # range(4):
-        # for face_number in [1]:  # range(4):
-        # for face_number in [2]:  # range(4):
-        # for face_number in [3]:  # range(4):
         for face_number in range(4):
             offset1, offset2 = (1, 0), (2, 0)
             iter_space1, iter_space2 = (0, 1, 1), (1, size - 1, 1)
@@ -160,23 +160,23 @@ class TestBoundaryStencils(unittest.TestCase):
                 print(" {:5d}".format(int(mesh[i, j])), end="")
             print()
         print("\n\n")
-        buf2 = mesh.reshape((size**2,))
-        for i in range(len(buf2)):
-            print(" {:4d}".format(i), end="")
-        print()
-        for i in range(len(buf2)):
-            print(" {:4d}".format(int(buf2[i])), end="")
-        print()
+        # buf2 = mesh.reshape((size**2,))
+        # for i in range(len(buf2)):
+        #     print(" {:4d}".format(i), end="")
+        # print()
+        # for i in range(len(buf2)):
+        #     print(" {:4d}".format(int(buf2[i])), end="")
+        # print()
 
         expected_result = [
-          [    30,  2519,  2620,  2721,  2822,    35],
-          [  2526,    25,    26,    27,    28,  2827],
-          [  1920,    19,    20,    21,    22,  2221],
-          [  1314,    13,    14,    15,    16,  1615],
-          [   708,     7,     8,     9,    10,  1009],
           [     0,   713,   814,   915,  1016,     5],
+          [   708,     7,     8,     9,    10,  1009],
+          [  1314,    13,    14,    15,    16,  1615],
+          [  1920,    19,    20,    21,    22,  2221],
+          [  2526,    25,    26,    27,    28,  2827],
+          [    30,  2519,  2620,  2721,  2822,    35],
         ]
 
-        self.assertEqual(mesh, expected_result)
+        np.testing.assert_array_almost_equal(expected_result, mesh)
 
         print("done")
