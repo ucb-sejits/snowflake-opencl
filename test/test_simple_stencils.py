@@ -17,7 +17,7 @@ class TestSimpleStencils(unittest.TestCase):
         :return:
         """
         buffer_size = 16
-        buffer_in = np.random.random((buffer_size, ))
+        buffer_in = np.random.random((buffer_size, )).astype(np.float32)
         for i, x in enumerate(buffer_in):
             # for j, y in enumerate(x):
                 buffer_in[i] = i
@@ -35,7 +35,7 @@ class TestSimpleStencils(unittest.TestCase):
         sobel_total = Stencil(
             sobel_x_component,
             'out',
-            ((1, -1, 1), ))
+            ((1, -2, 1), ))
 
         compiler = OpenCLCompiler(ctx)
         sobel_ocl = compiler.compile(sobel_total)
@@ -51,7 +51,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_sobel(self):
-        l = np.random.random((1024, 1024))
+        l = np.random.random((1024, 1024)).astype(np.float64)
         lena_out = np.zeros_like(l)
 
         import logging
@@ -80,12 +80,17 @@ class TestSimpleStencils(unittest.TestCase):
         out_evt.wait()
         print("done")
 
-    def test_3d_jacobi(self):
-        buffer_in = np.random.random((128, 128, 128))
-        # for j, x in enumerate(buffer_in):
-        #     for i, y in enumerate(x):
-        #         for k, _ in enumerate(y):
-        #             buffer_in[i, j, k] = i * j * k
+    def test_2d_jacobi(self):
+        size = 4
+        import logging
+        logging.basicConfig(level=20)
+
+        buffer_in = np.random.random((size, size)).astype(np.float32)
+        counter = 1
+        for j, x in enumerate(buffer_in):
+            for i, y in enumerate(x):
+                buffer_in[i, j] = float(counter)
+            counter += 1
 
         buffer_out = np.zeros_like(buffer_in)
 
@@ -97,7 +102,50 @@ class TestSimpleStencils(unittest.TestCase):
         out_buf = NDBuffer(queue, buffer_out)
 
         sc = StencilComponent(
-            'buffer',
+            'mesh',
+            WeightArray([
+                    [0, 1.0, 0],
+                    [10.0, 0, 100.0],
+                    [0, 1000.0, 0],
+            ])
+        )
+
+        jacobi_stencil = Stencil(sc, 'out', ((1, -2, 1), (1, -2, 1)), primary_mesh='out')
+
+        compiler = OpenCLCompiler(ctx)
+        jacobi_operator = compiler.compile(jacobi_stencil)
+        jacobi_operator(out_buf, in_buf)
+
+        buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
+        print("Input " + "=" * 80)
+        print(buffer_in)
+        print("Output" + "=" * 80)
+        print(buffer_out)
+        out_evt.wait()
+        print("done")
+
+    def test_3d_jacobi(self):
+        size = 4
+        import logging
+        logging.basicConfig(level=20)
+
+        buffer_in = np.random.random((size, size, size)).astype(np.float32)
+        # for j, x in enumerate(buffer_in):
+        #     for i, y in enumerate(x):
+        #         for k, _ in enumerate(y):
+        #             buffer_in[i, j, k] = 1.0  # float(i * j * k)
+
+        buffer_out = np.zeros_like(buffer_in)
+
+        device = cl.clGetDeviceIDs()[-1]
+        ctx = cl.clCreateContext(devices=[device])
+        queue = cl.clCreateCommandQueue(ctx)
+
+        in_buf = NDBuffer(queue, buffer_in)
+        out_buf = NDBuffer(queue, buffer_out)
+
+        sc = StencilComponent(
+            'mesh',
             WeightArray([
                 [
                     [0, 0, 0],
@@ -117,7 +165,7 @@ class TestSimpleStencils(unittest.TestCase):
             ])
         )
 
-        jacobi_stencil = Stencil(sc, 'out', ((1, -1, 1),) * 3, primary_mesh='out')
+        jacobi_stencil = Stencil(sc, 'out', ((1, size-1, 1),) * 3, primary_mesh='out')
 
         compiler = OpenCLCompiler(ctx)
         jacobi_operator = compiler.compile(jacobi_stencil)
