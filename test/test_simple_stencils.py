@@ -110,7 +110,7 @@ class TestSimpleStencils(unittest.TestCase):
             ])
         )
 
-        jacobi_stencil = Stencil(sc, 'out', ((1, -2, 1), (1, -2, 1)), primary_mesh='out')
+        jacobi_stencil = Stencil(sc, 'out', ((1, -1, 1), (1, -1, 1)), primary_mesh='out')
 
         compiler = OpenCLCompiler(ctx)
         jacobi_operator = compiler.compile(jacobi_stencil)

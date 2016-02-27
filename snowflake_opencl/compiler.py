@@ -129,6 +129,21 @@ class OpenCLCompiler(Compiler):
             self.global_work_size = 0
             self.local_work_size = 0
 
+        def insert_indexing_debugging_printfs(self, index_name, shape):
+            format_string = 'gid %d'
+            argument_string  = 'global_id,'
+            encode_string = 'encode'+CCompiler._shape_to_str(shape)
+
+            index_variables = ["{}_{}".format(index_name, dim) for dim in range(len(shape))]
+
+            format_string += "".join(" {} %d".format(var) for var in index_variables)
+            argument_string += " " + ", ".join("{}".format(var) for var in index_variables)
+
+            format_string += " " + encode_string + "(" + ", ".join("{}".format(var) for var in index_variables) + ") %d"
+            argument_string += ", " + encode_string + "(" + ", ".join("{}".format(var) for var in index_variables) + ")"
+
+            return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
+
         def transform(self, tree, program_config):
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
@@ -156,16 +171,8 @@ class OpenCLCompiler(Compiler):
                 sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
-                # sub.body.append(
-                #     StringTemplate('printf("gid %d i0 %d, i1 %d, dst %d src0 %d src1 %d\\n"' +
-                #                    ', global_id, index_0, index_1, encode4_4(index_0, index_1),' +
-                #                    ' encode4_4(index_0 + 2, index_1 + 0),' +
-                #                    ' encode4_4(index_0 + 1, index_1 + 0) );'))
-                # sub.body.append(
-                #     StringTemplate('printf("i0 %d, i1 %d, dst %f src0 %f src1 %f\\n"' +
-                #                    ', index_0, index_1, mesh[encode4_4(index_0, index_1)],' +
-                #                    ' mesh[encode4_4(index_0 + 2, index_1 + 0)], ' +
-                #                    ' mesh[encode4_4(index_0 + 1, index_1 + 0)] );'))
+                # Uncomment the following line to put some printf showing index values at runtime
+                # sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
