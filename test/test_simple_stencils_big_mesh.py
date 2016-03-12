@@ -10,13 +10,13 @@ from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
 __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
 
-class TestSimpleStencils(unittest.TestCase):
+class TestSimpleStencilsBigMesh(unittest.TestCase):
     def test_1d_translate(self):
         """
         slides over every element in a 1-d array 1 element to the left
         :return:
         """
-        buffer_size = 16
+        buffer_size = 64
         buffer_in = np.random.random((buffer_size, )).astype(np.float32)
         for i, x in enumerate(buffer_in):
             # for j, y in enumerate(x):
@@ -81,7 +81,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_2d_jacobi(self):
-        size = 4
+        size = 2**7
         import logging
         logging.basicConfig(level=20)
 
@@ -125,7 +125,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_3d_jacobi(self):
-        size = 4
+        size = 2 ** 5
         import logging
         logging.basicConfig(level=20)
 

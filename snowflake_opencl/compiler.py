@@ -12,10 +12,12 @@ from ctree.transformations import PyBasicConversions
 from ctree.types import get_ctype
 # noinspection PyProtectedMember
 from snowflake._compiler import find_names
+from snowflake.compiler_nodes import IterationSpace
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
 from snowflake.vector import Vector
 
+from snowflake_opencl.local_size_computer import LocalSizeComputer
 from snowflake_opencl.util import flattened_to_multi_index, global_work_size, local_work_size
 
 __author__ = 'dorthy luu'
@@ -42,23 +44,20 @@ class OpenCLCompiler(Compiler):
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class IterationSpaceExpander(CCompiler.IterationSpaceExpander):
+        def make_low(self, floor, dimension):
+            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
+
+        def make_high(self, ceiling, dimension):
+            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
+
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
-
-            def make_low(floor, dimension):
-                return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
-
-            def make_high(ceiling, dimension):
-                return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-            # make_low = lambda low, dim: low if low >= 0 else self.reference_array_shape[dim] + low
-            # make_high = lambda high, dim: high if high > 0 else self.reference_array_shape[dim] + high
 
             total_work_dims, total_strides, total_lows = [], [], []
 
             for space in node.space.spaces:
-                lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
-                highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
+                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
                 strides = space.stride
                 work_dims = []
 
@@ -130,13 +129,13 @@ class OpenCLCompiler(Compiler):
             self.local_work_size = 0
 
         def insert_indexing_debugging_printfs(self, index_name, shape):
-            format_string = 'gid %d'
-            argument_string  = 'global_id,'
+            format_string = 'wgid %d gid %d'
+            argument_string  = 'get_group_id(0), global_id,'
             encode_string = 'encode'+CCompiler._shape_to_str(shape)
 
             index_variables = ["{}_{}".format(index_name, dim) for dim in range(len(shape))]
 
-            format_string += "".join(" {} %d".format(var) for var in index_variables)
+            format_string += " index (" + ", ".join("%d".format(var) for var in index_variables) + ") "
             argument_string += " " + ", ".join("{}".format(var) for var in index_variables)
 
             format_string += " " + encode_string + "(" + ", ".join("{}".format(var) for var in index_variables) + ") %d"
@@ -166,13 +165,15 @@ class OpenCLCompiler(Compiler):
             for i, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
+                # local_size_computer = LocalSizeComputer(shape=i_space.space.spaces[0])
+
                 # build kernel
                 shape = subconfig[target].shape
                 sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
-                # sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
+                sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
@@ -191,6 +192,8 @@ class OpenCLCompiler(Compiler):
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
                     gws_arrays[gws] = SymbolRef("global_%d" % gws)
                 lws = local_work_size(gws)
+                # lws = local_size_computer.compute_local_size_bulky()
+
                 if lws not in lws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))

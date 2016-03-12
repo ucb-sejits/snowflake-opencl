@@ -5,6 +5,7 @@ from ctree.templates.nodes import StringTemplate
 import operator
 import ctypes
 import pycl as cl
+import sympy
 
 __author__ = 'dorthy luu'
 
@@ -30,6 +31,23 @@ def flattened_to_multi_index(flattened_id_symbol, shape, multipliers=None, offse
             stmt = Add(stmt, Constant(offsets[i]))
         body.append(stmt)
     return body
+
+def compute_virtual_indexing_parameters(actual_shape, iteration_shape, offset):
+    """
+    given a mesh of some size, and sub-region of that mesh with a given offset
+    and given a 1d position global_index in the global space, compute the coefficients necessary
+    to calculate the n-d indices for global_index
+
+    :param actual_shape:
+    :param iteration_shape:
+    :param offset:
+    :return:
+    """
+    global_1d_size = reduce(operator.mul, actual_shape, 1)
+    local_1d_size = reduce(operator.mul, iteration_shape, 1)
+    offset_1d_size = reduce(operator.mul, offset, 1)
+
+    tile_number = lambda x: (x - offset_1d_size) / local_1d_size
 
 
 def global_work_size(array_shape, iteration_space):
