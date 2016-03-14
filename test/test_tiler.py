@@ -45,11 +45,11 @@ class TestTiler(unittest.TestCase):
 
         mesh = np.zeros(base_shape)
 
-        coord = tiler.global_index_to_coord(30)
-
+        # coord = tiler.global_index_to_coord(63)
+        print("is valid(63) {}".format(tiler.valid_1d_index(63)))
         for index_1d in range(tiler.global_size_1d):
             coord = tiler.global_index_to_coord(index_1d)
-            if coord[0] < base_shape[0] and coord[1] < base_shape[1]:
+            if tiler.valid_1d_index(index_1d):
                 print("index_1d {} coord {}".format(index_1d, coord))
                 mesh[coord] = index_1d
             else:

@@ -46,6 +46,13 @@ class OclTiler(object):
 
         return tuple(coord)
 
+    def valid_1d_index(self, index_1d, iteration_space_index=0):
+        tile_coord = self.get_tile_coordinates(index_1d)
+        local_coord = self.get_local_coordinates(index_1d)
+
+        iteration_space_coord = tuple((x * y) + z for x, y, z in zip(tile_coord, self.local_work_size, local_coord))
+        return all(x < y for x, y in zip(iteration_space_coord, self.packed_iteration_shape))
+
     def get_tile_number(self, index_1d):
         """
         return a one dimensional tiler number from a 1 dimension index in the iteration space
