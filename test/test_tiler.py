@@ -26,7 +26,7 @@ class TestTiler(unittest.TestCase):
         self.assertEqual(tiler.local_work_size, (5, 6))
         self.assertEqual(tiler.tiling_shape, (2, 3))
 
-        self.assertEqual(tiler.global_size_1d, 9 * 14)
+        self.assertEqual(tiler.global_size_1d, 10 * 18)
         self.assertEqual(tiler.local_work_size_1d, 30)
 
         self.assertEqual(tiler.get_tile_number(0), 0)
@@ -45,15 +45,20 @@ class TestTiler(unittest.TestCase):
 
         mesh = np.zeros(base_shape)
 
-        for index_1d in range((base_shape[0]-2) * (base_shape[1]-2)):
-            coord = tiler.global_index_to_coord(index_1d)
-            print("index_1d {} coord {}".format(index_1d, coord))
-            mesh[tiler.global_index_to_coord(index_1d)] = index_1d
+        coord = tiler.global_index_to_coord(30)
 
-        for i in range(base_shape[0]):
+        for index_1d in range(tiler.global_size_1d):
+            coord = tiler.global_index_to_coord(index_1d)
+            if coord[0] < base_shape[0] and coord[1] < base_shape[1]:
+                print("index_1d {} coord {}".format(index_1d, coord))
+                mesh[coord] = index_1d
+            else:
+                print("Out of bound coordinate at {}".format(coord))
+
+        for i in range(base_shape[0]-1, -1, -1):
             for j in range(base_shape[1]):
                 print("{:5d}".format(int(mesh[(i, j)])), end="")
-            print
+            print()
         self.assertEqual(tiler.global_index_to_coord(0), (1, 1))
 
     def test_2d_11x16(self):

@@ -29,7 +29,8 @@ class OclTiler(object):
         self.tiling_divisors = self.get_tiling_divisors()
         self.local_divisors = self.get_local_divisors()
 
-        self.global_size_1d = reduce(operator.mul, self.packed_iteration_shape, 1)
+        self.virtual_global_size = tuple(x * y for x, y in zip(self.local_work_size, self.tiling_shape))
+        self.global_size_1d = reduce(operator.mul, self.virtual_global_size, 1)
         self.local_work_size_1d = reduce(operator.mul, self.local_work_size, 1)
 
     def global_index_to_coord(self, index_1d, iteration_space_index=0):
@@ -39,8 +40,8 @@ class OclTiler(object):
         coord = []
         for dim in range(self.dimensions):
             coord.append(
-                tile_coord[dim] * self.tiling_divisors[dim] +
-                local_coord[dim] * self.local_divisors[dim] +
+                tile_coord[dim] * self.local_work_size[dim] +
+                local_coord[dim] +
                 self.iteration_space.space.spaces[iteration_space_index].low[dim])
 
         return tuple(coord)
