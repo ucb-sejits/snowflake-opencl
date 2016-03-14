@@ -43,7 +43,8 @@ class TestTiler(unittest.TestCase):
         self.assertEqual(tiler.get_tile_coordinates(90), (1, 0))
         self.assertEqual(tiler.get_tile_coordinates(119), (1, 0))
 
-        mesh = np.zeros(base_shape)
+        mesh_1d_coords = np.zeros(base_shape)
+        mesh_tile_numbers = np.zeros(base_shape)
 
         # coord = tiler.global_index_to_coord(63)
         print("is valid(63) {}".format(tiler.valid_1d_index(63)))
@@ -51,13 +52,20 @@ class TestTiler(unittest.TestCase):
             coord = tiler.global_index_to_coord(index_1d)
             if tiler.valid_1d_index(index_1d):
                 print("index_1d {} coord {}".format(index_1d, coord))
-                mesh[coord] = index_1d
+                mesh_1d_coords[coord] = index_1d
+                mesh_tile_numbers[coord] = tiler.get_tile_number(index_1d)
             else:
                 print("Out of bound coordinate at {}".format(coord))
 
+        print("space with tile numbers")
         for i in range(base_shape[0]-1, -1, -1):
             for j in range(base_shape[1]):
-                print("{:5d}".format(int(mesh[(i, j)])), end="")
+                print("{:5d}".format(int(mesh_tile_numbers[(i, j)])), end="")
+            print()
+        print("space with global_id_numbers")
+        for i in range(base_shape[0]-1, -1, -1):
+            for j in range(base_shape[1]):
+                print("{:5d}".format(int(mesh_1d_coords[(i, j)])), end="")
             print()
         self.assertEqual(tiler.global_index_to_coord(0), (1, 1))
 
