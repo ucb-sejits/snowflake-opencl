@@ -50,7 +50,41 @@ def compute_virtual_indexing_parameters(actual_shape, iteration_shape, offset):
     tile_number = lambda x: (x - offset_1d_size) / local_1d_size
 
 
-def global_work_size(array_shape, iteration_space):
+def get_packed_iterations_shape(array_shape, iteration_space):
+    """
+    compact the iteration space by fixing highs and lows as necessary and then
+    squishing out the strides.
+
+    :param array_shape:
+    :param iteration_space:
+    :return:
+    """
+    gws = []
+
+    def make_low(floor, dimension):
+        return floor if floor >= 0 else array_shape[dimension] + floor
+
+    def make_high(ceiling, dimension):
+        return ceiling if ceiling > 0 else array_shape[dimension] + ceiling
+
+    for space in iteration_space.space.spaces:
+        lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
+        highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+        strides = space.stride
+        gws.append(
+            tuple(
+                [(high - low + stride - 1) / stride
+                 for (low, high, stride) in reversed(list(zip(lows, highs, strides)))
+                ]
+            ))
+
+    if all(other_shapes == gws[0] for other_shapes in gws[1:]):
+        return gws[0]
+    else:
+        raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
+
+
+def get_global_work_size(array_shape, iteration_space):
     gws = []
 
     def make_low(floor, dimension):
@@ -74,7 +108,7 @@ def global_work_size(array_shape, iteration_space):
         raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
 
 
-def local_work_size(gws):
+def get_local_work_size(gws):
     lws = 32
     while gws % lws != 0:
         lws -= 1

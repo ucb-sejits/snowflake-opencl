@@ -12,7 +12,7 @@ __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
 class TestComplexStencils(unittest.TestCase):
     def test_2d_gsrb(self):
-        size = 8
+        size = 512
         import logging
         logging.basicConfig(level=20)
 

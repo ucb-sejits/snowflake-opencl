@@ -81,7 +81,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_2d_jacobi(self):
-        size = 4
+        size = 55
         import logging
         logging.basicConfig(level=20)
 
