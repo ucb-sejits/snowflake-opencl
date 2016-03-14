@@ -1,10 +1,10 @@
 from __future__ import print_function
 import unittest
+import numpy as np
 
 from snowflake.compiler_nodes import IterationSpace, NDSpace, Space
 from snowflake.nodes import RectangularDomain
 
-from snowflake_opencl.local_size_computer import LocalSizeComputer
 from snowflake_opencl.ocl_tiler import OclTiler
 
 __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
@@ -33,6 +33,28 @@ class TestTiler(unittest.TestCase):
         self.assertEqual(tiler.get_tile_number(29), 0)
         self.assertEqual(tiler.get_tile_number(30), 1)
         self.assertEqual(tiler.get_tile_number(59), 1)
+
+        self.assertEqual(tiler.get_tile_coordinates(0), (0, 0))
+        self.assertEqual(tiler.get_tile_coordinates(30), (0, 1))
+        self.assertEqual(tiler.get_tile_coordinates(59), (0, 1))
+        self.assertEqual(tiler.get_tile_coordinates(60), (0, 2))
+        self.assertEqual(tiler.get_tile_coordinates(79), (0, 2))
+
+        self.assertEqual(tiler.get_tile_coordinates(90), (1, 0))
+        self.assertEqual(tiler.get_tile_coordinates(119), (1, 0))
+
+        mesh = np.zeros(base_shape)
+
+        for index_1d in range((base_shape[0]-2) * (base_shape[1]-2)):
+            coord = tiler.global_index_to_coord(index_1d)
+            print("index_1d {} coord {}".format(index_1d, coord))
+            mesh[tiler.global_index_to_coord(index_1d)] = index_1d
+
+        for i in range(base_shape[0]):
+            for j in range(base_shape[1]):
+                print("{:5d}".format(int(mesh[(i, j)])), end="")
+            print
+        self.assertEqual(tiler.global_index_to_coord(0), (1, 1))
 
     def test_2d_11x16(self):
         base_shape = (11, 16)

@@ -14,6 +14,8 @@ class OclTiler(object):
     appropriate style.  Linearize the various components to 1-d for now, so the
     The compiler using this can work in arbitrary numbers of dimensions
     """
+    # TODO: Implement bounds checking for when local_work_size does not divide space evenly
+    # TODO: Still need a more elegant way to manage multi-domain iteration spaces
     def __init__(self, reference_shape, iteration_space, context=None, force_local_work_size=None):
         self.reference_shape = reference_shape
         self.iteration_space = iteration_space
@@ -24,15 +26,68 @@ class OclTiler(object):
         self.local_work_size = force_local_work_size if force_local_work_size is not None \
             else LocalSizeComputer(self.packed_iteration_shape, self.context).compute_local_size_bulky()
         self.tiling_shape = self.get_tiling_shape()
+        self.tiling_divisors = self.get_tiling_divisors()
+        self.local_divisors = self.get_local_divisors()
 
         self.global_size_1d = reduce(operator.mul, self.packed_iteration_shape, 1)
         self.local_work_size_1d = reduce(operator.mul, self.local_work_size, 1)
 
-    def global_index_to_coord(self, global_index):
-        return 0
+    def global_index_to_coord(self, index_1d, iteration_space_index=0):
+        tile_coord = self.get_tile_coordinates(index_1d)
+        local_coord = self.get_local_coordinates(index_1d)
+
+        coord = []
+        for dim in range(self.dimensions):
+            coord.append(
+                tile_coord[dim] * self.tiling_divisors[dim] +
+                local_coord[dim] * self.local_divisors[dim] +
+                self.iteration_space.space.spaces[iteration_space_index].low[dim])
+
+        return tuple(coord)
 
     def get_tile_number(self, index_1d):
+        """
+        return a one dimensional tiler number from a 1 dimension index in the iteration space
+        :param index_1d:
+        :return:
+        """
         return int(index_1d / self.local_work_size_1d)
+
+    def get_tile_coordinates(self, index_1d):
+        """
+        return an n-dimensional coordinate of a given tile in the space
+        :param index_1d:
+        :return:
+        """
+        tile_number = self.get_tile_number(index_1d)
+        coord = []
+        for dim in range(self.dimensions):
+            coord.append(int(tile_number / self.tiling_divisors[dim]))
+            tile_number = tile_number % self.tiling_divisors[dim]
+
+        return tuple(coord)
+
+    def get_tiling_divisors(self):
+        return [
+            reduce(operator.mul, self.tiling_shape[(dim+1):], 1)
+            for dim in range(self.dimensions)
+            ]
+
+    def get_local_coordinates(self, index_1d):
+        internal_1d = index_1d % self.local_work_size_1d
+
+        coord = []
+        for dim in range(self.dimensions):
+            coord.append(int(internal_1d / self.local_divisors[dim]))
+            internal_1d = internal_1d % self.local_divisors[dim]
+
+        return tuple(coord)
+
+    def get_local_divisors(self):
+        return [
+            reduce(operator.mul, self.local_work_size[(dim+1):], 1)
+            for dim in range(self.dimensions)
+            ]
 
     def get_tiling_shape(self):
         tiling_shape = tuple(
