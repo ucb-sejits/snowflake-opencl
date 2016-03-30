@@ -49,48 +49,6 @@ class OclTiler(object):
 
         return tuple(coord)
 
-    def global_index_to_coordinate_expressions(self, global_index_symbol, iteration_space_index=0):
-        tile_number = Div(global_index_symbol, Constant(self.local_work_size_1d))
-        tile_number._force_parentheses = True
-        tile_coords = []
-
-        internal_1d = Mod(global_index_symbol, Constant(self.local_work_size_1d))
-        internal_1d._force_parentheses = True
-        local_coords = []
-
-        for dim in range(self.dimensions):
-            tile_coord = Div(tile_number, Constant(self.tiling_divisors[dim]))
-            tile_coord._force_parentheses = True
-            tile_coords.append(tile_coord)
-            tile_number = Mod(tile_number, Constant(self.tiling_divisors[dim]))
-            tile_number._force_parentheses = True
-
-            local_coord = Mod(internal_1d, Constant(self.local_divisors[dim]))
-            local_coord._force_parentheses = True
-            local_coords.append(local_coord)
-            internal_1d = Mod(internal_1d, Constant(self.local_divisors[dim]))
-            internal_1d._force_parentheses = True
-
-        expressions = []
-        for dim in range(self.dimensions):
-            expressions.append(
-                Add(
-                    Add(
-                        Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
-                        local_coords[dim]
-                    ),
-                    Constant(self.iteration_space.space.spaces[iteration_space_index].low[dim])
-                )
-            )
-        return expressions
-
-    def valid_1d_index(self, index_1d, iteration_space_index=0):
-        tile_coord = self.get_tile_coordinates(index_1d)
-        local_coord = self.get_local_coordinates(index_1d)
-
-        iteration_space_coord = tuple((x * y) + z for x, y, z in zip(tile_coord, self.local_work_size, local_coord))
-        return all(x < y for x, y in zip(iteration_space_coord, self.packed_iteration_shape))
-
     def get_tile_number(self, index_1d):
         """
         return a one dimensional tiler number from a 1 dimension index in the iteration space
@@ -128,6 +86,61 @@ class OclTiler(object):
             internal_1d = internal_1d % self.local_divisors[dim]
 
         return tuple(coord)
+
+    def valid_1d_index(self, index_1d, iteration_space_index=0):
+        tile_coord = self.get_tile_coordinates(index_1d)
+        local_coord = self.get_local_coordinates(index_1d)
+
+        iteration_space_coord = tuple((x * y) + z for x, y, z in zip(tile_coord, self.local_work_size, local_coord))
+        return all(x < y for x, y in zip(iteration_space_coord, self.packed_iteration_shape))
+
+    def global_index_to_coordinate_expressions(self, global_index_symbol, iteration_space_index=0):
+        tile_coords = self.get_tile_coordinates_expression(global_index_symbol)
+        local_coords = self.get_local_coordinates_expression((global_index_symbol))
+
+        coords = []
+        for dim in range(self.dimensions):
+            coords.append(
+                Add(
+                    Add(
+                        Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
+                        local_coords[dim]
+                    ),
+                    Constant(self.iteration_space.space.spaces[iteration_space_index].low[dim])
+                )
+            )
+        return coords
+
+    def get_tile_number_expression(self, index_1d_symbol):
+        tile_number = Div(index_1d_symbol, Constant(self.local_work_size_1d))
+        tile_number._force_parentheses = True
+        return tile_number
+
+    def get_tile_coordinates_expression(self, index_1d_symbol):
+        tile_number = self.get_tile_number_expression(index_1d_symbol)
+        coords = []
+        for dim in range(self.dimensions):
+            coord = Div(tile_number, Constant(self.tiling_divisors[dim]))
+            coord._force_parentheses = True
+            tile_number = Mod(tile_number, Constant(self.tiling_divisors[dim]))
+            tile_number._force_parentheses = True
+            coords.append(coord)
+
+        return coords
+
+    def get_local_coordinates_expression(self, index_1d_symbol):
+        internal_1d = Mod(index_1d_symbol, Constant(self.local_work_size_1d))
+        internal_1d._force_parentheses = True
+
+        coords = []
+        for dim in range(self.dimensions):
+            coord = Div(internal_1d, Constant(self.local_divisors[dim]))
+            coord._force_parentheses = True
+            internal_1d = Mod(internal_1d, Constant(self.local_divisors[dim]))
+            internal_1d._force_parentheses = True
+            coords.append(coord)
+
+        return tuple(coords)
 
     def get_local_divisors(self):
         return [
