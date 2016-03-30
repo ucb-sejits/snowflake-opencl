@@ -51,11 +51,12 @@ class TestTiler(unittest.TestCase):
         for index_1d in range(tiler.global_size_1d):
             coord = tiler.global_index_to_coord(index_1d)
             if tiler.valid_1d_index(index_1d):
-                print("index_1d {} coord {}".format(index_1d, coord))
+                # print("index_1d {} coord {}".format(index_1d, coord))
                 mesh_1d_coords[coord] = index_1d
                 mesh_tile_numbers[coord] = tiler.get_tile_number(index_1d)
             else:
-                print("Out of bound coordinate at {}".format(coord))
+                # print("Out of bound coordinate at {}".format(coord))
+                pass
 
         print("space with tile numbers")
         for i in range(base_shape[0]-1, -1, -1):

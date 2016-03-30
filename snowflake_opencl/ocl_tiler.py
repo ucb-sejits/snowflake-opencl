@@ -3,6 +3,9 @@ from __future__ import print_function
 import operator
 
 from snowflake_opencl.local_size_computer import LocalSizeComputer
+from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
+    Assign, Array, FunctionCall, Ref, Return, CFile
+
 
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
@@ -45,6 +48,41 @@ class OclTiler(object):
                 self.iteration_space.space.spaces[iteration_space_index].low[dim])
 
         return tuple(coord)
+
+    def global_index_to_coordinate_expressions(self, global_index_symbol, iteration_space_index=0):
+        tile_number = Div(global_index_symbol, Constant(self.local_work_size_1d))
+        tile_number._force_parentheses = True
+        tile_coords = []
+
+        internal_1d = Mod(global_index_symbol, Constant(self.local_work_size_1d))
+        internal_1d._force_parentheses = True
+        local_coords = []
+
+        for dim in range(self.dimensions):
+            tile_coord = Div(tile_number, Constant(self.tiling_divisors[dim]))
+            tile_coord._force_parentheses = True
+            tile_coords.append(tile_coord)
+            tile_number = Mod(tile_number, Constant(self.tiling_divisors[dim]))
+            tile_number._force_parentheses = True
+
+            local_coord = Mod(internal_1d, Constant(self.local_divisors[dim]))
+            local_coord._force_parentheses = True
+            local_coords.append(local_coord)
+            internal_1d = Mod(internal_1d, Constant(self.local_divisors[dim]))
+            internal_1d._force_parentheses = True
+
+        expressions = []
+        for dim in range(self.dimensions):
+            expressions.append(
+                Add(
+                    Add(
+                        Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
+                        local_coords[dim]
+                    ),
+                    Constant(self.iteration_space.space.spaces[iteration_space_index].low[dim])
+                )
+            )
+        return expressions
 
     def valid_1d_index(self, index_1d, iteration_space_index=0):
         tile_coord = self.get_tile_coordinates(index_1d)

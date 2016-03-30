@@ -3,8 +3,9 @@ import ctypes
 import operator
 import pycl as cl
 from ctree.c.macros import NULL
-from ctree.c.nodes import Constant, Assign, SymbolRef, FunctionCall, FunctionDecl, MultiNode, CFile, \
-    ArrayDef, Array, Ref, Return, BitOrAssign
+from ctree.c.nodes import MultiNode, BitOrAssign
+from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
+    Assign, Array, FunctionCall, Ref, Return, CFile
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
 from ctree.ocl.nodes import OclFile
@@ -19,6 +20,7 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 from snowflake.vector import Vector
 
 from snowflake_opencl.local_size_computer import LocalSizeComputer
+from snowflake_opencl.ocl_tiler import OclTiler
 from snowflake_opencl.util import flattened_to_multi_index, get_global_work_size, get_local_work_size, \
     get_packed_iterations_shape
 
@@ -127,6 +129,7 @@ class OpenCLCompiler(Compiler):
             node = self.generic_visit(node)
 
             total_work_dims, total_strides, total_lows = [], [], []
+            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.local_work_size)
 
             for space in node.space.spaces:
                 lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
@@ -151,10 +154,11 @@ class OpenCLCompiler(Compiler):
 
             # calculate each index inline
             for space in range(len(node.space.spaces)):
-                indices = flattened_to_multi_index(SymbolRef("global_id"),
-                                                   shape=Vector(highs) - Vector(lows),
-                                                   multipliers=total_strides[space],
-                                                   offsets=total_lows[space])
+                # indices = self.build_index_variables(SymbolRef("global_id"),
+                #                                    shape=Vector(highs) - Vector(lows),
+                #                                    multipliers=total_strides[space],
+                #                                    offsets=total_lows[space])
+                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"))
                 for dim in range(len(self.reference_array_shape)):
                     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
                 parts.extend(node.body)
@@ -202,7 +206,7 @@ class OpenCLCompiler(Compiler):
             self.local_work_size = 0
 
         def insert_indexing_debugging_printfs(self, index_name, shape):
-            format_string = 'wgid %d gid %d'
+            format_string = 'wgid %03d gid %04d'
             argument_string  = 'get_group_id(0), global_id,'
             encode_string = 'encode'+CCompiler._shape_to_str(shape)
 
@@ -251,14 +255,25 @@ class OpenCLCompiler(Compiler):
                 shape = subconfig[target].shape
                 packed_iteration_shape = get_packed_iterations_shape(shape, i_space)
                 local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
+                local_work_size = (5, 6)
                 tiling_shape = tuple(
                     [
                         int(packed_iteration_shape[dim] / local_work_size[dim]) + 1
                         for dim in range(len(packed_iteration_shape))
                     ])
                 local_work_size_1d = reduce(operator.mul, local_work_size)
+                print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
-                sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
+                # old_style = True
+                old_style = False
+                if(old_style):
+                    sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
+                else:
+                    sub = self.parent_cls.TiledIterationSpaceExpander(
+                        self.index_name,
+                        shape,
+                        packed_iteration_shape,
+                        local_work_size).visit(i_space)
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
@@ -276,13 +291,15 @@ class OpenCLCompiler(Compiler):
 
                 # declare new global and local work size arrays if necessary
                 gws = get_global_work_size(shape, i_space)
+                if(gws % local_work_size_1d > 0):
+                    gws = int(gws / local_work_size_1d) * local_work_size_1d
                 if gws not in gws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
                     gws_arrays[gws] = SymbolRef("global_%d" % gws)
                 lws = get_local_work_size(gws)
                 # lws = local_size_computer.compute_local_size_bulky()
-
+                lws = local_work_size_1d
                 if lws not in lws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))
