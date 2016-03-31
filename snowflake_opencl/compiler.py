@@ -87,7 +87,8 @@ class OpenCLCompiler(Compiler):
                 #                                    shape=Vector(highs) - Vector(lows),
                 #                                    multipliers=total_strides[space],
                 #                                    offsets=total_lows[space])
-                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"))
+                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
+                                                                       iteration_space_index=space)
                 for dim in range(len(self.reference_array_shape)):
                     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
 

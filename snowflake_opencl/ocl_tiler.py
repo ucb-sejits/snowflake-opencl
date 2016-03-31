@@ -18,6 +18,8 @@ class OclTiler(object):
     The compiler using this can work in arbitrary numbers of dimensions
     """
     # TODO: Still need a more elegant way to manage multi-domain iteration spaces
+    # TODO: Make striding work correctly
+    # TODO: Confirm that guards work correctly with striding
     def __init__(self, reference_shape, iteration_space, context=None, force_local_work_size=None):
         self.reference_shape = reference_shape
         self.iteration_space = iteration_space
@@ -117,9 +119,12 @@ class OclTiler(object):
         for dim in range(self.dimensions):
             coords.append(
                 Add(
-                    Add(
-                        Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
-                        local_coords[dim]
+                    Mul(
+                        Add(
+                            Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
+                            local_coords[dim]
+                        ),
+                        Constant(self.iteration_space.space.spaces[iteration_space_index].stride[dim])
                     ),
                     Constant(self.iteration_space.space.spaces[iteration_space_index].low[dim])
                 )

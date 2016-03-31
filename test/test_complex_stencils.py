@@ -6,13 +6,14 @@ import pycl as cl
 from snowflake.nodes import StencilComponent, WeightArray, Stencil, SparseWeightArray, StencilGroup, RectangularDomain
 
 from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
+from snowflake_opencl.util import print_mesh
 
 __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
 
 class TestComplexStencils(unittest.TestCase):
     def test_2d_gsrb(self):
-        size = 512
+        size = 10
         import logging
         logging.basicConfig(level=20)
 
@@ -45,6 +46,7 @@ class TestComplexStencils(unittest.TestCase):
         red_iteration_space1 = RectangularDomain(((1, -2, 2), (1, -2, 2)))
         red_iteration_space2 = RectangularDomain(((2, -1, 2), (2, -1, 2)))
         red_iteration_space = red_iteration_space1 + red_iteration_space2
+        # red_iteration_space = red_iteration_space1
         red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='out')
 
         black_iteration_space1 = RectangularDomain(((1, -2, 2), (2, -1, 2)))
@@ -52,7 +54,8 @@ class TestComplexStencils(unittest.TestCase):
         black_iteration_space = black_iteration_space1 + black_iteration_space2
         black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='out')
 
-        stencil_group = StencilGroup([red_stencil, black_stencil])
+        # stencil_group = StencilGroup([red_stencil, black_stencil])
+        stencil_group = StencilGroup([red_stencil])
         # stencil_group = StencilGroup([red_stencil])
 
         compiler = OpenCLCompiler(ctx)
@@ -60,11 +63,10 @@ class TestComplexStencils(unittest.TestCase):
         jacobi_operator(in_buf, in_buf)
 
         buffer_out, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, buffer_out)
-        print("Input " + "=" * 80)
-        print(buffer_in)
-        print("Output" + "=" * 80)
-        print(buffer_out)
         out_evt.wait()
+
+        print_mesh(buffer_in, "Input Buffer "+"="*60)
+        print_mesh(buffer_out, "Ouput Buffer "+"="*60)
         print("done")
 
     def test_3d_gsrb(self):
