@@ -263,18 +263,14 @@ class OpenCLCompiler(Compiler):
                 shape = subconfig[target].shape
                 packed_iteration_shape = get_packed_iterations_shape(shape, i_space)
                 gws = reduce(operator.mul, packed_iteration_shape)
+                # local_work_size = (4, 4, 4)
                 local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
-                local_work_size = (5, 6)
-                tiling_shape = tuple(
-                    [
-                        int(packed_iteration_shape[dim] / local_work_size[dim]) + 1
-                        for dim in range(len(packed_iteration_shape))
-                    ])
+
                 local_work_size_1d = reduce(operator.mul, local_work_size)
                 print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
-                old_style = True
-                # old_style = False
+                # old_style = True
+                old_style = False
                 if(old_style):
                     sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
                 else:
@@ -286,7 +282,7 @@ class OpenCLCompiler(Compiler):
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
-                sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
+                # sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(

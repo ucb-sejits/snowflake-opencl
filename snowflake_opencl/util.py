@@ -1,3 +1,4 @@
+from __future__ import print_function
 from ctree.c.macros import NULL
 from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile
@@ -170,3 +171,52 @@ def generate_control(name, global_size, local_size, kernel_params, kernel, other
     out_file = CFile(name=name, body=body, config_target='opencl')
     print(out_file)
     return out_file
+
+def print_mesh(mesh, message=None):
+    """
+    print this mesh, if 3d axes go up the page
+    if 2d then standard over and down
+    :return:
+    """
+    shape = mesh.shape
+
+    if message:
+        print("Mesh print {} shape {}".format(message, shape))
+
+    if len(shape) == 4:
+        max_h, max_i, max_j, max_k = shape
+
+        for h in range(max_h):
+            print("hyperplane {}".format(h))
+            for i in range(max_i-1, -1, -1):
+                # print("i  {}".format(i))
+                for j in range(max_j-1, -1, -1):
+                    print(" "*j*2, end="")
+                    for k in range(max_k):
+                        print("{:10.6f}".format(mesh[(h, i, j, k)]), end=" ")
+                    print()
+                print()
+            print()
+    elif len(shape) == 3:
+        max_i, max_j, max_k = shape
+
+        for i in range(max_i-1, -1, -1):
+            # print("i  {}".format(i))
+            for j in range(max_j-1, -1, -1):
+                print(" "*j*2, end="")
+                for k in range(max_k):
+                    print("{:10.2f}".format(mesh[(i, j, k)]), end=" ")
+                print()
+            print()
+        print()
+    elif len(shape) == 2:
+        max_i, max_j = shape
+
+        for i in range(max_i):
+            # print("i  {}".format(i))
+            for j in range(max_j):
+                print("{:10.5f}".format(mesh[(i, j)]), end=" ")
+            print()
+        print()
+    else:
+        print("I don't know how to print mesh with {} dimensions".format(len(shape)))

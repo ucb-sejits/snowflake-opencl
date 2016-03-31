@@ -3,6 +3,8 @@ import unittest
 import numpy as np
 import pycl as cl
 
+from snowflake_opencl.util import print_mesh
+
 from snowflake.nodes import StencilComponent, WeightArray, Stencil, SparseWeightArray
 
 from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
@@ -131,15 +133,15 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_3d_jacobi(self):
-        size = 4
+        size = 19
         import logging
         logging.basicConfig(level=20)
 
         buffer_in = np.random.random((size, size, size)).astype(np.float32)
-        # for j, x in enumerate(buffer_in):
-        #     for i, y in enumerate(x):
-        #         for k, _ in enumerate(y):
-        #             buffer_in[i, j, k] = 1.0  # float(i * j * k)
+        for j, x in enumerate(buffer_in):
+            for i, y in enumerate(x):
+                for k, _ in enumerate(y):
+                    buffer_in[i, j, k] = 1.0  # float(i * j * k)
 
         buffer_out = np.zeros_like(buffer_in)
 
@@ -178,9 +180,10 @@ class TestSimpleStencils(unittest.TestCase):
         jacobi_operator(out_buf, in_buf)
 
         buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
-        print("Input " + "=" * 80)
-        print(buffer_in)
-        print("Output" + "=" * 80)
-        print(buffer_out)
         out_evt.wait()
+
+        print("Input " + "=" * 80)
+        print_mesh(buffer_in)
+        print("Output" + "=" * 80)
+        print_mesh(buffer_out)
         print("done")

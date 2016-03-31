@@ -17,7 +17,6 @@ class OclTiler(object):
     appropriate style.  Linearize the various components to 1-d for now, so the
     The compiler using this can work in arbitrary numbers of dimensions
     """
-    # TODO: Implement bounds checking for when local_work_size does not divide space evenly
     # TODO: Still need a more elegant way to manage multi-domain iteration spaces
     def __init__(self, reference_shape, iteration_space, context=None, force_local_work_size=None):
         self.reference_shape = reference_shape
@@ -62,7 +61,7 @@ class OclTiler(object):
 
             return If(conditional, node)
         else:
-            node
+            return node
 
     def get_tile_number(self, index_1d):
         """
