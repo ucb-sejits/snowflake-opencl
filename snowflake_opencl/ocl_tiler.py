@@ -4,7 +4,7 @@ import operator
 
 from snowflake_opencl.local_size_computer import LocalSizeComputer
 from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile
+    Assign, Array, FunctionCall, Ref, Return, CFile, LtE, And, If
 
 
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
@@ -48,6 +48,21 @@ class OclTiler(object):
                 self.iteration_space.space.spaces[iteration_space_index].low[dim])
 
         return tuple(coord)
+
+    def add_guards_if_necessary(self, node):
+        guards = []
+        for dim in range(self.dimensions):
+            if self.packed_iteration_shape[dim] % self.local_work_size[dim] != 0:
+                guards.append(LtE(SymbolRef("index_{}".format(dim)), Constant(self.packed_iteration_shape[dim])))
+
+        if len(guards) > 0:
+            conditional = guards[0]
+            for additional_term in guards[1:]:
+                conditional = And(conditional, additional_term)
+
+            return If(conditional, node)
+        else:
+            node
 
     def get_tile_number(self, index_1d):
         """

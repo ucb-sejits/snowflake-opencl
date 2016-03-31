@@ -81,7 +81,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_2d_jacobi(self):
-        size = 55
+        size = 11
         import logging
         logging.basicConfig(level=20)
 
@@ -118,9 +118,15 @@ class TestSimpleStencils(unittest.TestCase):
 
         buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
         print("Input " + "=" * 80)
-        print(buffer_in)
+        for i in range(size-1, -1, -1):
+            for j in range(size):
+                print("{:7.0f}".format(buffer_in[(i, j)]), end="")
+            print()
         print("Output" + "=" * 80)
-        print(buffer_out)
+        for i in range(size-1, -1, -1):
+            for j in range(size):
+                print("{:7.0f}".format(buffer_out[(i, j)]), end="")
+            print()
         out_evt.wait()
         print("done")
 

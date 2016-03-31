@@ -161,7 +161,15 @@ class OpenCLCompiler(Compiler):
                 indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"))
                 for dim in range(len(self.reference_array_shape)):
                     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
+
+                # for dim in range(tile.dim)
+                new_body = [
+                    tiler.add_guards_if_necessary(statement)
+                    for statement in node.body
+                    ]
+                node.body = new_body
                 parts.extend(node.body)
+
             return MultiNode(parts)
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
@@ -254,6 +262,7 @@ class OpenCLCompiler(Compiler):
 
                 shape = subconfig[target].shape
                 packed_iteration_shape = get_packed_iterations_shape(shape, i_space)
+                gws = reduce(operator.mul, packed_iteration_shape)
                 local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
                 local_work_size = (5, 6)
                 tiling_shape = tuple(
@@ -264,8 +273,8 @@ class OpenCLCompiler(Compiler):
                 local_work_size_1d = reduce(operator.mul, local_work_size)
                 print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
-                # old_style = True
-                old_style = False
+                old_style = True
+                # old_style = False
                 if(old_style):
                     sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
                 else:
@@ -290,9 +299,13 @@ class OpenCLCompiler(Compiler):
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
                 # declare new global and local work size arrays if necessary
-                gws = get_global_work_size(shape, i_space)
+                # gws = get_global_work_size(packed_iteration_shape, i_space)
                 if(gws % local_work_size_1d > 0):
-                    gws = int(gws / local_work_size_1d) * local_work_size_1d
+                    expanded_packed = [
+                        (int(packed_iteration_shape[dim] / local_work_size[dim]) + 1) * local_work_size[dim]
+                        for dim in range(len(local_work_size))
+                    ]
+                    gws = reduce(operator.mul, expanded_packed)
                 if gws not in gws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
