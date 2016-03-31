@@ -1,11 +1,11 @@
 import ctypes
-
 import operator
+
 import pycl as cl
 from ctree.c.macros import NULL
-from ctree.c.nodes import MultiNode, BitOrAssign
-from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
+from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile
+from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
 from ctree.ocl.nodes import OclFile
@@ -14,15 +14,10 @@ from ctree.transformations import PyBasicConversions
 from ctree.types import get_ctype
 # noinspection PyProtectedMember
 from snowflake._compiler import find_names
-from snowflake.compiler_nodes import IterationSpace
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-from snowflake.vector import Vector
 
-from snowflake_opencl.local_size_computer import LocalSizeComputer
 from snowflake_opencl.ocl_tiler import OclTiler
-from snowflake_opencl.util import flattened_to_multi_index, get_global_work_size, get_local_work_size, \
-    get_packed_iterations_shape
 
 __author__ = 'dorthy luu'
 
@@ -47,54 +42,10 @@ class OpenCLCompiler(Compiler):
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
-    class IterationSpaceExpander(CCompiler.IterationSpaceExpander):
-        def make_low(self, floor, dimension):
-            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
-
-        def make_high(self, ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-        def visit_IterationSpace(self, node):
-            node = self.generic_visit(node)
-
-            total_work_dims, total_strides, total_lows = [], [], []
-
-            for space in node.space.spaces:
-                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
-                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
-                strides = space.stride
-                work_dims = []
-
-                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
-                    work_dims.append((high - low + stride - 1) / stride)
-
-                total_work_dims.append(tuple(work_dims))
-                total_strides.append(strides)
-                total_lows.append(lows)
-
-            # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
-            # initialize index variables
-            parts.extend(
-                SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
-                for dim in range(len(self.reference_array_shape)))
-
-            # calculate each index inline
-            for space in range(len(node.space.spaces)):
-                indices = flattened_to_multi_index(SymbolRef("global_id"),
-                                                   shape=Vector(highs) - Vector(lows),
-                                                   multipliers=total_strides[space],
-                                                   offsets=total_lows[space])
-                for dim in range(len(self.reference_array_shape)):
-                    parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
-                parts.extend(node.body)
-            return MultiNode(parts)
-
     class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, packed_shape, local_work_size):
-            self.packed_shape = packed_shape
-            self.local_work_size = local_work_size
+        def __init__(self, index_name, reference_array_shape, tiler):
+            self.packed_shape = tiler.packed_iteration_shape
+            self.local_work_size = tiler.local_work_size
             super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
 
         def make_low(self, floor, dimension):
@@ -102,28 +53,6 @@ class OpenCLCompiler(Compiler):
 
         def make_high(self, ceiling, dimension):
             return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-        def build_index_variables(self, flattened_id_symbol, shape, multipliers=None, offsets=None):
-            # flattened_id should be a node
-            # offsets applied after multipliers
-
-            body = []
-            ndim = len(shape)
-            full_size = reduce(operator.mul, shape, 1)
-            for i in range(ndim):
-                stmt = flattened_id_symbol
-                mod_size = reduce(operator.mul, shape[i:], 1)
-                div_size = reduce(operator.mul, shape[(i + 1):], 1)
-                if mod_size < full_size:
-                    stmt = Mod(stmt, Constant(mod_size))
-                if div_size != 1:
-                    stmt = Div(stmt, Constant(div_size))
-                if multipliers and multipliers[i] != 1:
-                    stmt = Mul(stmt, Constant(multipliers[i]))
-                if offsets and offsets[i] != 0:
-                    stmt = Add(stmt, Constant(offsets[i]))
-                body.append(stmt)
-            return body
 
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
@@ -213,12 +142,13 @@ class OpenCLCompiler(Compiler):
             self.global_work_size = 0
             self.local_work_size = 0
 
-        def insert_indexing_debugging_printfs(self, index_name, shape):
+        def insert_indexing_debugging_printfs(self, shape):
             format_string = 'wgid %03d gid %04d'
-            argument_string  = 'get_group_id(0), global_id,'
+            argument_string = 'get_group_id(0), global_id,'
+            # noinspection PyProtectedMember
             encode_string = 'encode'+CCompiler._shape_to_str(shape)
 
-            index_variables = ["{}_{}".format(index_name, dim) for dim in range(len(shape))]
+            index_variables = ["{}_{}".format(self.index_name, dim) for dim in range(len(shape))]
 
             format_string += " index (" + ", ".join("%d".format(var) for var in index_variables) + ") "
             argument_string += " " + ", ".join("{}".format(var) for var in index_variables)
@@ -261,28 +191,27 @@ class OpenCLCompiler(Compiler):
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
                 shape = subconfig[target].shape
-                packed_iteration_shape = get_packed_iterations_shape(shape, i_space)
+
+                tiler = OclTiler(shape, i_space, force_local_work_size=None)
+
+                packed_iteration_shape = tiler.packed_iteration_shape
+
                 gws = reduce(operator.mul, packed_iteration_shape)
                 # local_work_size = (4, 4, 4)
-                local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
+                local_work_size = tiler.local_work_size
+                # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
 
                 local_work_size_1d = reduce(operator.mul, local_work_size)
                 print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
-                # old_style = True
-                old_style = False
-                if(old_style):
-                    sub = self.parent_cls.IterationSpaceExpander(self.index_name, shape).visit(i_space)
-                else:
-                    sub = self.parent_cls.TiledIterationSpaceExpander(
-                        self.index_name,
-                        shape,
-                        packed_iteration_shape,
-                        local_work_size).visit(i_space)
+                sub = self.parent_cls.TiledIterationSpaceExpander(
+                    self.index_name,
+                    shape,
+                    tiler).visit(i_space)
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
-                # sub.body.append(self.insert_indexing_debugging_printfs(self.index_name, shape))
+                # sub.body.append(self.insert_indexing_debugging_printfs(shape))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
@@ -295,8 +224,7 @@ class OpenCLCompiler(Compiler):
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
                 # declare new global and local work size arrays if necessary
-                # gws = get_global_work_size(packed_iteration_shape, i_space)
-                if(gws % local_work_size_1d > 0):
+                if gws % local_work_size_1d > 0:
                     expanded_packed = [
                         (int(packed_iteration_shape[dim] / local_work_size[dim]) + 1) * local_work_size[dim]
                         for dim in range(len(local_work_size))
@@ -306,13 +234,16 @@ class OpenCLCompiler(Compiler):
                     control.append(
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
                     gws_arrays[gws] = SymbolRef("global_%d" % gws)
-                lws = get_local_work_size(gws)
-                # lws = local_size_computer.compute_local_size_bulky()
-                lws = local_work_size_1d
-                if lws not in lws_arrays:
+
+                if local_work_size_1d not in lws_arrays:
                     control.append(
-                        ArrayDef(SymbolRef("local_%d " % lws, ctypes.c_ulong()), 1, Array(body=[Constant(lws)])))
-                    lws_arrays[lws] = SymbolRef("local_%d" % lws)
+                        ArrayDef(
+                            SymbolRef("local_%d " % local_work_size_1d, ctypes.c_ulong()),
+                            1,
+                            Array(body=[Constant(local_work_size_1d)])
+                        )
+                    )
+                    lws_arrays[local_work_size_1d] = SymbolRef("local_%d" % local_work_size_1d)
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
@@ -326,7 +257,7 @@ class OpenCLCompiler(Compiler):
                 # clEnqueueNDRangeKernel
                 enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
                                    SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
-                                   gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
+                                   gws_arrays[gws], lws_arrays[local_work_size_1d], Constant(0), NULL(), NULL()
                                ])
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))

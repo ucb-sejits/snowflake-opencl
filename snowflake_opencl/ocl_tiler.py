@@ -24,6 +24,7 @@ class OclTiler(object):
         self.context = context
         self.dimensions = len(self.reference_shape)
 
+        self.iteration_space_shape = self.get_iteration_space_shape()
         self.packed_iteration_shape = self.get_packed_shape()
         self.local_work_size = force_local_work_size if force_local_work_size is not None \
             else LocalSizeComputer(self.packed_iteration_shape, self.context).compute_local_size_bulky()
@@ -194,6 +195,39 @@ class OclTiler(object):
             packed_shapes.append(
                 tuple(
                     [(high - low + stride - 1) / stride
+                     for (low, high, stride) in list(zip(lows, highs, strides))
+                     ]
+                ))
+
+        if all(other_shapes == packed_shapes[0] for other_shapes in packed_shapes[1:]):
+            return packed_shapes[0]
+        else:
+            raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
+
+    def get_iteration_space_shape(self):
+        """
+        compact the iteration space by fixing highs and lows as necessary and then
+        squishing out the strides.
+        IMPORTANT: Iterations may contain multiple spaces, currently these must all be the
+        same size so that they can all be run in the same kernel
+
+        :return: a single packed shape for all the iteration spaces
+        """
+        packed_shapes = []
+
+        def make_low(floor, dimension):
+            return floor if floor >= 0 else self.reference_shape[dimension] + floor
+
+        def make_high(ceiling, dimension):
+            return ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
+
+        for space in self.iteration_space.space.spaces:
+            lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
+            highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+            strides = space.stride
+            packed_shapes.append(
+                tuple(
+                    [(high - low + stride - 1)
                      for (low, high, stride) in list(zip(lows, highs, strides))
                      ]
                 ))

@@ -6,6 +6,7 @@ import pycl as cl
 from snowflake.nodes import StencilComponent, Stencil, SparseWeightArray
 
 from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
+from snowflake_opencl.util import print_mesh
 
 __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
@@ -26,7 +27,7 @@ class TestBoundaryStencils(unittest.TestCase):
                     mesh[i, j, k] = counter
                     counter += 1.0
 
-        print("buffer_in  is {}".format(mesh))
+        print_mesh(mesh, "'buffer_in'")
 
         device = cl.clGetDeviceIDs()[-1]
         ctx = cl.clCreateContext(devices=[device])
@@ -35,6 +36,7 @@ class TestBoundaryStencils(unittest.TestCase):
         in_buf = NDBuffer(queue, mesh)
 
         for dim in range(3):
+            print("Dimension {} {}".format(dim, "="*80))
             for side in ['lo', 'hi']:
                 (offset1, offset2) = (1, 2) if side == 'lo' else (-1, -2)
                 vector1 = tuple(offset1 if i == dim else 0 for i in range(3))
@@ -59,14 +61,13 @@ class TestBoundaryStencils(unittest.TestCase):
                 sobel_ocl = compiler.compile(boundary_stencil)
                 sobel_ocl(in_buf)
 
-        mesh, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, mesh)
+                mesh, out_evt = cl.buffer_to_ndarray(queue, in_buf.buffer, mesh)
+                out_evt.wait()
 
-        out_evt.wait()
-
-        print("buffer out {}".format(mesh))
+                print_mesh(mesh, "buffer out")
         # print("linear {}".format(mesh.reshape((size**3,))))
 
-        expected = [
+        expected = np.array([
             [
                 [   0.,    0.,    0.,    0.],
                 [   0.,  105.,  206.,    0.],
@@ -91,7 +92,8 @@ class TestBoundaryStencils(unittest.TestCase):
                 [   0.,  501.,  602.,    0.],
                 [   0.,  703.,  804.,    0.],
                 [   0.,    0.,    0.,    0.],],
-        ]
+        ])
+        print_mesh(expected, "expected")
 
         np.testing.assert_array_almost_equal(expected, mesh)
         print("done")
