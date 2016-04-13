@@ -53,23 +53,30 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_sobel(self):
-        l = np.random.random((1024, 1024)).astype(np.float64)
-        lena_out = np.zeros_like(l)
+        size = 16
+        lena_in = np.random.random((size, size)).astype(np.float32)
+        # counter = 1
+        # for j, x in enumerate(lena_in):
+        #     for i, y in enumerate(x):
+        #         lena_in[i, j] = float(counter)
+        #     counter += 1
+
+        lena_out = np.zeros_like(lena_in)
 
         import logging
         logging.basicConfig(level=20)
 
-        device = cl.clGetDeviceIDs()[1]
+        device = cl.clGetDeviceIDs()[-1]
         ctx = cl.clCreateContext(devices=[device])
         queue = cl.clCreateCommandQueue(ctx)
 
-        in_buf = NDBuffer(queue, l)
+        in_buf = NDBuffer(queue, lena_in)
         out_buf = NDBuffer(queue, lena_out)
 
         sobel_x_component = StencilComponent('arr', WeightArray([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]))
         sobel_y_component = StencilComponent('arr', WeightArray([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]))
         sobel_total = Stencil(
-            sobel_x_component * sobel_x_component + sobel_y_component * sobel_y_component,
+            (sobel_x_component * sobel_x_component) + (sobel_y_component * sobel_y_component),
             'out',
             ((1, -1, 1), (1, -1, 1)))
 
@@ -78,8 +85,10 @@ class TestSimpleStencils(unittest.TestCase):
         sobel_ocl(out_buf, in_buf)
 
         lena_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, lena_out)
-        print(lena_out)
         out_evt.wait()
+
+        print_mesh(lena_in, "lena_in")
+        print_mesh(lena_out, "lena_out")
         print("done")
 
     def test_2d_jacobi(self):

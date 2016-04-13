@@ -54,8 +54,7 @@ class TestComplexStencils(unittest.TestCase):
         black_iteration_space = black_iteration_space1 + black_iteration_space2
         black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='out')
 
-        # stencil_group = StencilGroup([red_stencil, black_stencil])
-        stencil_group = StencilGroup([red_stencil])
+        stencil_group = StencilGroup([red_stencil, black_stencil])
         # stencil_group = StencilGroup([red_stencil])
 
         compiler = OpenCLCompiler(ctx)

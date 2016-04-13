@@ -143,7 +143,7 @@ class OpenCLCompiler(Compiler):
             self.global_work_size = 0
             self.local_work_size = 0
 
-        def insert_indexing_debugging_printfs(self, shape):
+        def insert_indexing_debugging_printfs(self, shape, name_index=None):
             format_string = 'wgid %03d gid %04d'
             argument_string = 'get_group_id(0), global_id,'
             # noinspection PyProtectedMember
@@ -156,6 +156,13 @@ class OpenCLCompiler(Compiler):
 
             format_string += " " + encode_string + "(" + ", ".join("{}".format(var) for var in index_variables) + ") %d"
             argument_string += ", " + encode_string + "(" + ", ".join("{}".format(var) for var in index_variables) + ")"
+
+            # TODO: Fix this, seems like this.names is a set and does not like the index reference
+            # if name_index is not None:
+            #     format_string += " " + self.names[name_index] + "[" + encode_string + \
+            #                      "(" + ", ".join("{}".format(var) for var in index_variables) + ")] %f"
+            #     argument_string += ", " + self.names[name_index] + "[" + encode_string + \
+            #                        "(" + ", ".join("{}".format(var) for var in index_variables) + ")]"
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
@@ -213,6 +220,8 @@ class OpenCLCompiler(Compiler):
 
                 # Uncomment the following line to put some printf showing index values at runtime
                 # sub.body.append(self.insert_indexing_debugging_printfs(shape))
+                # Or uncomment this to be able to print data from one of the buffer names, by specifying name index
+                # sub.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
