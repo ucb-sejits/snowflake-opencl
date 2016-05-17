@@ -19,6 +19,9 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 
 from snowflake_opencl.ocl_tiler import OclTiler
 
+from gpuarray.core import MappedArray
+import numpy as np
+
 __author__ = 'dorthy luu'
 
 
@@ -119,7 +122,20 @@ class OpenCLCompiler(Compiler):
 
         def __call__(self, *args, **kwargs):
             queue = cl.clCreateCommandQueue(self.context)
-            true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
+            filtered_args = []
+            for arg in args:
+                arg.buffer if isinstance(arg, NDBuffer) else arg.view(MappedArray)
+
+                if isinstance(arg, NDBuffer):
+                    filtered_args.append(arg)
+                if isinstance(arg, np.ndarray):
+                    mapped = arg.view(type=MappedArray)
+                    mapped.device_to_gpu(device=self.context.devices[0], wait=True)
+                    filtered_args.append(mapped.get_buffer(self.context.devices[0]))
+                else:
+                    filtered_args.append(arg)
+
+            true_args = [queue] + self.kernels + filtered_args
             # this returns None instead of an int...
             return self._c_function(*true_args)
 
