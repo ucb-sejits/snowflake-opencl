@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import ctypes
 import operator
 
@@ -19,8 +21,9 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 
 from snowflake_opencl.ocl_tiler import OclTiler
 
-from gpuarray.core import MappedArray
+from gpuarray.core import MappedArray, get_gpu
 import numpy as np
+
 
 __author__ = 'dorthy luu'
 
@@ -38,9 +41,16 @@ class NDBuffer(object):
 
 class OpenCLCompiler(Compiler):
 
-    def __init__(self, context):
+    def __init__(self):
         super(OpenCLCompiler, self).__init__()
-        self.context = context
+
+
+    @staticmethod
+    def get_context_from_args(args, device):
+        for arr in args:
+            if isinstance(arr, MappedArray):
+                buff = arr.get_buffer(device)
+                return buff.context
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
@@ -106,8 +116,7 @@ class OpenCLCompiler(Compiler):
             return MultiNode(parts)
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size, kernels):
-            self.context = context
+        def __init__(self, global_work_size, local_work_size, kernels):
             self.gws = global_work_size
             self.lws = local_work_size
             self.kernels = kernels
@@ -120,29 +129,28 @@ class OpenCLCompiler(Compiler):
             self.entry_point_name = entry_point_name
             return self
 
-        def __call__(self, *args, **kwargs):
-            queue = cl.clCreateCommandQueue(self.context)
+        def __call__(self, device, *args, **kwargs):
+            context = OpenCLCompiler.get_context_from_args(args, device)
+            queue = cl.clCreateCommandQueue(context)
             filtered_args = []
             for arg in args:
-                arg.buffer if isinstance(arg, NDBuffer) else arg.view(MappedArray)
 
                 if isinstance(arg, NDBuffer):
-                    filtered_args.append(arg)
-                if isinstance(arg, np.ndarray):
-                    mapped = arg.view(type=MappedArray)
-                    mapped.device_to_gpu(device=self.context.devices[0], wait=True)
-                    filtered_args.append(mapped.get_buffer(self.context.devices[0]))
+                    filtered_args.append(arg.buffer)
+                elif isinstance(arg, MappedArray):
+                    filtered_args.append(arg.get_buffer(device))
                 else:
                     filtered_args.append(arg)
 
             true_args = [queue] + self.kernels + filtered_args
+            # print(true_args)
             # this returns None instead of an int...
             return self._c_function(*true_args)
 
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None):
+                     _hash=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
@@ -155,9 +163,17 @@ class OpenCLCompiler(Compiler):
 
             self.snowflake_ast = original
             self.parent_cls = OpenCLCompiler
-            self.context = context
             self.global_work_size = 0
             self.local_work_size = 0
+
+        def args_to_subconfig(self, args):
+            device, args = args[0], args[1:]
+            names_to_use = self.arg_spec
+            subconf = self.Subconfig()
+            for name, arg in zip(names_to_use, args):
+                subconf[name] = arg
+            subconf.device = device
+            return subconf
 
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
             format_string = 'wgid %03d gid %04d'
@@ -194,6 +210,15 @@ class OpenCLCompiler(Compiler):
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
 
+            name_arg_type_map = {}
+            for arg_name, arg in subconfig.items():
+                if isinstance(arg, NDBuffer):
+                    name_arg_type_map[arg_name] = (arg, get_ctype(arg.ary.ravel()))
+                elif isinstance(arg, np.ndarray):
+                    name_arg_type_map[arg_name] = (arg, get_ctype(arg.ravel()))
+                else:
+                    name_arg_type_map[arg_name] = (arg, get_ctype(arg))
+
             self.parent_cls.IndexOpToEncode(name_shape_map).visit(tree)
             c_tree = PyBasicConversions().visit(tree)
 
@@ -226,7 +251,7 @@ class OpenCLCompiler(Compiler):
                 # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
 
                 local_work_size_1d = reduce(operator.mul, local_work_size)
-                print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
+                # print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
                 sub = self.parent_cls.TiledIterationSpaceExpander(
                     self.index_name,
@@ -240,9 +265,8 @@ class OpenCLCompiler(Compiler):
                 # sub.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
 
                 kernel_params = [
-                    SymbolRef(name=arg_name, sym_type=get_ctype(
-                         arg if not isinstance(arg, NDBuffer) else arg.ary.ravel()  # hack
-                     ), _global=True) for arg_name, arg in subconfig.items()
+                    SymbolRef(name=arg_name, sym_type=argtype, _global=True)
+                    for arg_name, (arg, argtype) in name_arg_type_map.items()
                    ]
                 kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i), params=kernel_params, defn=[sub])
                 kernel_func.set_kernel()
@@ -298,10 +322,9 @@ class OpenCLCompiler(Compiler):
                 control_params.append(SymbolRef(kernel_func.name.name, cl.cl_kernel()))
             control_params.extend([
                     SymbolRef(name=arg_name, sym_type=get_ctype(
-                         arg) if not isinstance(arg, NDBuffer) else cl.cl_mem()  # hack
+                         arg) if not isinstance(arg, (NDBuffer, np.ndarray)) else cl.cl_mem()  # hack
                      ) for arg_name, arg in subconfig.items()
                    ])
-
             control = FunctionDecl(return_type=ctypes.c_int32(), name="control", params=control_params, defn=control)
             ocl_include = StringTemplate("""
                             #include <stdio.h>
@@ -314,23 +337,25 @@ class OpenCLCompiler(Compiler):
                             """)
 
             c_file = CFile(name="control", body=[ocl_include, control], config_target='opencl')
-            print(c_file)
-            for f in ocl_files:
-                print("{}".format(f.codegen()))
+            #print(c_file)
+            # for f in ocl_files:
+            #     print("{}".format(f.codegen()))
             return [c_file] + ocl_files
 
         def finalize(self, transform_result, program_config):
 
             project = Project(files=transform_result)
             kernels = []
+            subconfig = program_config.args_subconfig
+            context = OpenCLCompiler.get_context_from_args(subconfig.values(), subconfig.device)
             for i, f in enumerate(transform_result[1:]):
-                kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" % i])
-            fn = OpenCLCompiler.ConcreteSpecializedKernel(
-                self.context, self.global_work_size, self.local_work_size, kernels)
+                kernels.append(cl.clCreateProgramWithSource(context, f.codegen()).build()["kernel_%d" % i])
+            fn = OpenCLCompiler.ConcreteSpecializedKernel(self.global_work_size, self.local_work_size, kernels)
             func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
-                        cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
+                        cl.cl_mem if isinstance(arg, (NDBuffer, np.ndarray)) else type(arg)
                         for arg in program_config.args_subconfig.values()
                     ]
+            # print(func_types)
             return fn.finalize(
                 entry_point_name='control',  # not used
                 project_node=project,
@@ -340,12 +365,41 @@ class OpenCLCompiler(Compiler):
             )
 
     def _post_process(self, original, compiled, index_name, **kwargs):
-        return self.LazySpecializedKernel(
+        kern = self.LazySpecializedKernel(
             py_ast=compiled,
             original=original,
             names=find_names(original),
             index_name=index_name,
             target_names=[stencil.primary_mesh for stencil in original.body if hasattr(stencil, "primary_mesh")],
             _hash=hash(original),
-            context=self.context
         )
+
+        def callable(*args):
+            if isinstance(args[-1], cl.cl_device):
+                device = args[-1]
+                args = args[:-1]
+            else:
+                device = get_gpu()
+
+            new_args = [
+                # arg.view(MappedArray) if isinstance(arg, np.ndarray) else
+                # arg.buffer if isinstance(arg, NDBuffer) else arg
+                # for arg in args
+            ]
+            for arg in args:
+                if isinstance(arg, MappedArray):
+                    new_args.append(arg)
+                    arg.device_to_gpu(device, wait=True)
+                elif isinstance(arg, np.ndarray):
+                    view = arg.view(MappedArray)
+                    view.device_to_gpu(device=device, wait=True)
+                    new_args.append(view)
+                elif isinstance(arg, NDBuffer):
+                    new_args.append(arg.buffer)
+                else:
+                    new_args.append(arg)
+            return kern(device, *new_args)
+
+        return callable
+
+
