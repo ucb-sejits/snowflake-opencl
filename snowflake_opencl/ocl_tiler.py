@@ -27,7 +27,7 @@ class OclTiler(object):
         self.dimensions = len(self.reference_shape)
 
         self.iteration_space_shape = self.get_iteration_space_shape()
-        self.packed_iteration_shape = self.get_packed_shape()
+        self.packed_iteration_shape = self.get_iteration_space_shape()
         self.local_work_size = force_local_work_size if force_local_work_size is not None \
             else LocalSizeComputer(self.packed_iteration_shape, self.context).compute_local_size_bulky()
         self.tiling_shape = self.get_tiling_shape()
@@ -191,7 +191,9 @@ class OclTiler(object):
             return floor if floor >= 0 else self.reference_shape[dimension] + floor
 
         def make_high(ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
+            ceiling = ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
+            return ceiling
+
 
         for space in self.iteration_space.space.spaces:
             lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
@@ -224,7 +226,9 @@ class OclTiler(object):
             return floor if floor >= 0 else self.reference_shape[dimension] + floor
 
         def make_high(ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
+            ceiling = ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
+            return ceiling
+
 
         for space in self.iteration_space.space.spaces:
             lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
@@ -232,7 +236,7 @@ class OclTiler(object):
             strides = space.stride
             packed_shapes.append(
                 tuple(
-                    [(high - low + stride - 1)
+                    [((high - low + 1) // stride)
                      for (low, high, stride) in list(zip(lows, highs, strides))
                      ]
                 ))
