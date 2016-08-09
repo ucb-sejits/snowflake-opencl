@@ -130,18 +130,10 @@ class OpenCLCompiler(Compiler):
             return self
 
         def __call__(self, device, *args, **kwargs):
-            context = OpenCLCompiler.get_context_from_args(args, device)
-            queue = cl.clCreateCommandQueue(context)
             filtered_args = []
+            queue = MappedArray.get_queue(device)
             for arg in args:
-
-                if isinstance(arg, NDBuffer):
-                    filtered_args.append(arg.buffer)
-                elif isinstance(arg, MappedArray):
-                    filtered_args.append(arg.get_buffer(device))
-                else:
-                    filtered_args.append(arg)
-
+                filtered_args.append(arg.get_buffer(device))
             true_args = [queue] + self.kernels + filtered_args
             # print(true_args)
             # this returns None instead of an int...
@@ -394,11 +386,11 @@ class OpenCLCompiler(Compiler):
                     view = arg.view(MappedArray)
                     view.device_to_gpu(device=device, wait=True)
                     new_args.append(view)
-                elif isinstance(arg, NDBuffer):
-                    new_args.append(arg.buffer)
                 else:
-                    new_args.append(arg)
+                    raise TypeError("Arguments must be MappedArrays or ndarrays.")
             return kern(device, *new_args)
+
+        callable.arg_spec = kern.arg_spec
 
         return callable
 
