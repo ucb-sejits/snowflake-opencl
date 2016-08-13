@@ -87,11 +87,12 @@ class OpenCLCompiler(Compiler):
                 total_lows.append(lows)
 
             # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
+            index_type = ctypes.c_int()
+            parts = [Assign(SymbolRef("global_id", index_type),
                             FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
             # initialize index variables
             parts.extend(
-                SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
+                SymbolRef("{}_{}".format(self.index_name, dim), index_type)
                 for dim in range(len(self.reference_array_shape)))
 
             # calculate each index inline
@@ -388,6 +389,9 @@ class OpenCLCompiler(Compiler):
                     new_args.append(view)
                 else:
                     raise TypeError("Arguments must be MappedArrays or ndarrays.")
+
+            # for i in range(len(set(kern.target_names))):
+            #     args[i].dirty[device.value] = True
             return kern(device, *new_args)
 
         callable.arg_spec = kern.arg_spec

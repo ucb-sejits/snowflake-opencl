@@ -6,6 +6,8 @@ from snowflake_opencl.local_size_computer import LocalSizeComputer
 from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile, LtE, And, If
 
+import numpy as np
+
 
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
@@ -115,20 +117,17 @@ class OclTiler(object):
         tile_coords = self.get_tile_coordinates_expression(global_index_symbol)
         local_coords = self.get_local_coordinates_expression((global_index_symbol))
 
-        coords = []
-        for dim in range(self.dimensions):
-            coords.append(
-                Add(
-                    Mul(
-                        Add(
-                            Mul(tile_coords[dim], Constant(self.local_work_size[dim])),
-                            local_coords[dim]
-                        ),
-                        Constant(self.iteration_space.space.spaces[iteration_space_index].stride[dim])
-                    ),
-                    Constant(self.iteration_space.space.spaces[iteration_space_index].low[dim])
-                )
-            )
+        products = np.append(np.cumprod(self.packed_iteration_shape[::-1])[::-1], [1])
+        space = self.iteration_space.space.spaces[iteration_space_index]
+        def make_low(floor, dimension):
+            return floor if floor >= 0 else self.reference_shape[dimension] + floor
+        coords = [
+            Mod(global_index_symbol, Constant(int(products[i]))) / Constant(int(products[i+1])) *
+                Constant(int(space.stride[i])) + Constant(int(make_low(space.low[i], i)))
+            for i in range(self.dimensions)
+        ]
+
+        # index_m = (gid % \Pi_{i=m}^{n} d_i) / (\Pi_{i=m+1}^{n} d_i) * stride_m + offset
         return coords
 
     def get_tile_number_expression(self, index_1d_symbol):
@@ -236,7 +235,7 @@ class OclTiler(object):
             strides = space.stride
             packed_shapes.append(
                 tuple(
-                    [((high - low + 1) // stride)
+                    [((high - low) // stride)
                      for (low, high, stride) in list(zip(lows, highs, strides))
                      ]
                 ))
