@@ -228,6 +228,9 @@ class OclTiler(object):
             ceiling = ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
             return ceiling
 
+        def clamp_high(ceiling, floor, stride):
+            (ceiling - floor) // stride
+
 
         for space in self.iteration_space.space.spaces:
             lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
@@ -235,7 +238,7 @@ class OclTiler(object):
             strides = space.stride
             packed_shapes.append(
                 tuple(
-                    [((high - low) // stride)
+                    [(high - low - 1) // stride + 1
                      for (low, high, stride) in list(zip(lows, highs, strides))
                      ]
                 ))
