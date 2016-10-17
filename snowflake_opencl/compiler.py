@@ -4,7 +4,7 @@ import operator
 import pycl as cl
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile
+    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -28,6 +28,7 @@ class NDBuffer(object):
         self.shape = ary.shape
         self.dtype = ary.dtype
         self.ndim = ary.ndim
+        self.queue = queue
         self.buffer, evt = cl.buffer_from_ndarray(queue, ary)
         if blocking:
             evt.wait()
@@ -54,12 +55,13 @@ class OpenCLCompiler(Compiler):
         def make_high(self, ceiling, dimension):
             return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
 
+
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
 
             total_work_dims, total_strides, total_lows = [], [], []
-            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.local_work_size)
-
+            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.packed_shape)
+            local_tiler = OclTiler(self.local_work_size, node, force_local_work_size=self.local_work_size)
             for space in node.space.spaces:
                 lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
                 highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
@@ -74,12 +76,22 @@ class OpenCLCompiler(Compiler):
                 total_lows.append(lows)
 
             # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
+            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
+                     Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
+                     Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                     StringTemplate("""__local float* localmem;""")]
+            #get local_id(0)
             # initialize index variables
             parts.extend(
                 SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
                 for dim in range(len(self.reference_array_shape)))
+
+            parts.extend(
+                SymbolRef("{}_{}".format("local_" + self.index_name, dim), ctypes.c_ulong())
+                for dim in range(len(self.reference_array_shape)))
+            # parts.extend(
+            #     SymbolRef("*localmem", ctypes.c_float(), _local=True)
+            # )
 
             # calculate each index inline
             for space in range(len(node.space.spaces)):
@@ -89,8 +101,12 @@ class OpenCLCompiler(Compiler):
                 #                                    offsets=total_lows[space])
                 indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
                                                                        iteration_space_index=space)
+                local_indices = local_tiler.global_index_to_coordinate_expressions(SymbolRef("local_id"), iteration_space_index=space)
+
                 for dim in range(len(self.reference_array_shape)):
                     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
+                for dim in range(len(self.reference_array_shape)):
+                    parts.append(Assign(SymbolRef("{}_{}".format("local_" + self.index_name, dim)), local_indices[dim]))
 
                 # for dim in range(tile.dim)
                 new_body = [
@@ -99,8 +115,51 @@ class OpenCLCompiler(Compiler):
                     ]
                 node.body = new_body
                 parts.extend(node.body)
+                parts.extend(self.local_to_global_copy())
+
 
             return MultiNode(parts)
+
+        def local_to_global_copy(self):
+            final = []
+            localSize = reduce(operator.mul, self.local_work_size)
+            ghost_size = self.reference_array_shape[0] - self.packed_shape[0]
+            gid_x = self.packed_shape[0] / self.local_work_size[0]
+            local_reference_array_shape = []
+            for x in self.local_work_size:
+                local_reference_array_shape.append(x + ghost_size)
+            copyingSize = reduce(operator.mul, local_reference_array_shape)
+            index = 0
+            while index < copyingSize:
+                left = ArrayRef(SymbolRef(name="localmem"), Add(SymbolRef(name="local_id"), Constant(index)))
+                arguments = self.local_to_global_index()
+                encode_arg0 = Add(arguments[0], Constant(index % local_reference_array_shape[0]))
+                encode_arg1 = Add(arguments[1], Constant(index / local_reference_array_shape[1]))
+                encode = FunctionCall(func=SymbolRef("encode" + str(self.reference_array_shape[0]) + "_" + str(self.reference_array_shape[0])), args=[encode_arg0, encode_arg1])
+                right = ArrayRef(SymbolRef(name="mesh"), encode)
+                if index + localSize > copyingSize:
+                    ifstatement = 'if (global_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
+                    ifstatement = StringTemplate(ifstatement)
+                    final.append(ifstatement)
+                    final.append((Assign(left, right)))
+                    final.append(StringTemplate('}'))
+                else:
+                    final.append(Assign(left, right))
+                index+= localSize
+            return final
+
+
+        def local_to_global_index(self):
+            gid_x = self.packed_shape[0] / self.local_work_size[0]
+            gid_y = self.packed_shape[1] / self.local_work_size[1]
+            group0 = Mod(SymbolRef('group_id'), Constant(gid_x))
+            group0._force_parentheses = True
+            group1 = Div(SymbolRef('group_id'), Constant(gid_y))
+            group1._force_parentheses = True
+            offset0 = Mul(group0, Constant(self.local_work_size[0]))
+            offset1 = Mul(group1, Constant(self.local_work_size[1]))
+            return (offset0, offset1)
+
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
         def __init__(self, context, global_work_size, local_work_size, kernels):
@@ -177,7 +236,7 @@ class OpenCLCompiler(Compiler):
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
-
+            local_work_size = (5, 5)
             self.parent_cls.IndexOpToEncode(name_shape_map).visit(tree)
             c_tree = PyBasicConversions().visit(tree)
 
@@ -185,6 +244,7 @@ class OpenCLCompiler(Compiler):
             for shape in shapes:
                 # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
+                encode_funcs.append(generate_encode_macro('encode' + CCompiler._shape_to_str(local_work_size), local_work_size))
 
             includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
 
@@ -200,12 +260,11 @@ class OpenCLCompiler(Compiler):
 
                 shape = subconfig[target].shape
 
-                tiler = OclTiler(shape, i_space, force_local_work_size=None)
-
+                tiler = OclTiler(shape, i_space, force_local_work_size=(3,3))
                 packed_iteration_shape = tiler.packed_iteration_shape
 
                 gws = reduce(operator.mul, packed_iteration_shape)
-                # local_work_size = (4, 4, 4)
+
                 local_work_size = tiler.local_work_size
                 # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
 
