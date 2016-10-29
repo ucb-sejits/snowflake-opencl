@@ -16,7 +16,7 @@ def product(vector):
 
 class LocalSizeComputer(object):
     def __init__(self, shape, device=None):
-        self.shape = shape[:]
+        self.shape = shape[:] #including ghost? local_max_size, maybe takes the whole mesh and figure out the size?
         self.dimensions = len(shape)
         if device is None:
             try:

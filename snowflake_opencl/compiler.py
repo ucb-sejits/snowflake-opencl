@@ -1,6 +1,5 @@
 import ctypes
 import operator
-
 import pycl as cl
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
@@ -32,7 +31,6 @@ class NDBuffer(object):
         self.buffer, evt = cl.buffer_from_ndarray(queue, ary)
         if blocking:
             evt.wait()
-
 
 class OpenCLCompiler(Compiler):
 
@@ -79,7 +77,7 @@ class OpenCLCompiler(Compiler):
             parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
                      Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
                      Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                     StringTemplate("""__local float* localmem;""")]
+                     StringTemplate("""__local float localmem[25];""")]
             #get local_id(0)
             # initialize index variables
             parts.extend(
@@ -114,37 +112,71 @@ class OpenCLCompiler(Compiler):
                     for statement in node.body
                     ]
                 node.body = new_body
-                parts.extend(node.body)
                 parts.extend(self.local_to_global_copy())
-
-
+                local_reference_array_shape = self.calculate_local_reference_array_shape()
+                parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
+                encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
+                self.changingMeshtoLocal(node.body[0].right, encodeFunc)
+                parts.append(StringTemplate('''if (group_id == 0) {'''))
+                parts.append(StringTemplate('printf("local_index0 %d, local_index1 %d, encode %d, localmem %f\\n", local_index_0, local_index_1, encode5_5(local_index_0, local_index_1 ), localmem[encode5_5(local_index_0, local_index_1)]);'))
+                parts.append(StringTemplate('''printf("global_index0 %d, globlal_index1 %d value %f\\n", index_0, index_1, mesh[encode11_11(index_0, index_1)]);'''))
+                parts.append(StringTemplate('''}'''))
+                parts.extend(node.body)
+                #parts.append(StringTemplate('wait();'))
             return MultiNode(parts)
+
+        def changingMeshtoLocal(self, object, encodeFunc=None):
+            if isinstance(object, BinaryOp):
+                self.changingMeshtoLocal(object.left, encodeFunc)
+                self.changingMeshtoLocal(object.right, encodeFunc)
+            if isinstance(object, SymbolRef):
+                if object.name == 'mesh':
+                    object.name = 'localmem'
+                if object.name == 'index_0' or object.name == 'index_1':
+                    object.name = 'local_' + object.name
+
+            if isinstance(object, FunctionCall):
+                object.func = encodeFunc
+                for x in object.args:
+                    if isinstance(x, BinaryOp):
+                        self.changingMeshtoLocal(x, encodeFunc)
+
+        def calculate_local_reference_array_shape(self):
+            ghost_size = self.reference_array_shape[0] - self.packed_shape[0]
+            local_reference_array_shape = []
+            for x in self.local_work_size:
+                local_reference_array_shape.append(x + ghost_size)
+            return local_reference_array_shape
 
         def local_to_global_copy(self):
             final = []
             localSize = reduce(operator.mul, self.local_work_size)
-            ghost_size = self.reference_array_shape[0] - self.packed_shape[0]
-            gid_x = self.packed_shape[0] / self.local_work_size[0]
-            local_reference_array_shape = []
-            for x in self.local_work_size:
-                local_reference_array_shape.append(x + ghost_size)
+            local_reference_array_shape = self.calculate_local_reference_array_shape()
             copyingSize = reduce(operator.mul, local_reference_array_shape)
             index = 0
             while index < copyingSize:
-                left = ArrayRef(SymbolRef(name="localmem"), Add(SymbolRef(name="local_id"), Constant(index)))
+                local_location = Add(SymbolRef(name="local_id"), Constant(index))
+                local_location._force_parentheses = True
+                left = ArrayRef(SymbolRef(name="localmem"), local_location)
                 arguments = self.local_to_global_index()
-                encode_arg0 = Add(arguments[0], Constant(index % local_reference_array_shape[0]))
-                encode_arg1 = Add(arguments[1], Constant(index / local_reference_array_shape[1]))
+                sidearg0 = Mod(local_location, Constant(local_reference_array_shape[0]))
+                sidearg0._force_parentheses = True
+                sidearg1 = Div(local_location, Constant(local_reference_array_shape[1]))
+                sidearg1._force_parentheses = True
+                encode_arg0 = Add(arguments[0],sidearg0 )
+                encode_arg1 = Add(arguments[1], sidearg1)
                 encode = FunctionCall(func=SymbolRef("encode" + str(self.reference_array_shape[0]) + "_" + str(self.reference_array_shape[0])), args=[encode_arg0, encode_arg1])
                 right = ArrayRef(SymbolRef(name="mesh"), encode)
                 if index + localSize > copyingSize:
-                    ifstatement = 'if (global_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
+                    ifstatement = 'if (local_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
                     ifstatement = StringTemplate(ifstatement)
                     final.append(ifstatement)
                     final.append((Assign(left, right)))
+                    #final.append(StringTemplate('printf("at groupid %d, index %d, %f\\n",group_id, local_id + ' + str(index) + ' , localmem[local_id + ' + str(index) + ']);'))
                     final.append(StringTemplate('}'))
                 else:
                     final.append(Assign(left, right))
+                    #final.append(StringTemplate('printf("at groupid %d, index %d, %f\\n",group_id, local_id + ' +  str(index) + ' , localmem[local_id + ' + str(index) + ']);'))
                 index+= localSize
             return final
 
@@ -331,7 +363,7 @@ class OpenCLCompiler(Compiler):
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
 
-            control.append(StringTemplate("""clFinish(queue);"""))
+            #control.append(StringTemplate("""clFinish(queue);"""))
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
