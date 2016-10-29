@@ -34,15 +34,17 @@ class NDBuffer(object):
 
 class OpenCLCompiler(Compiler):
 
-    def __init__(self, context):
+    def __init__(self, context, local=False,loop=1):
         super(OpenCLCompiler, self).__init__()
         self.context = context
+        self.local = local
+        self.loop = loop
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, tiler):
+        def __init__(self, index_name, reference_array_shape, tiler, local=False):
             self.packed_shape = tiler.packed_iteration_shape
             self.local_work_size = tiler.local_work_size
             super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
@@ -117,13 +119,17 @@ class OpenCLCompiler(Compiler):
                 parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
                 encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
                 self.changingMeshtoLocal(node.body[0].right, encodeFunc)
-                parts.append(StringTemplate('''if (group_id == 0) {'''))
-                parts.append(StringTemplate('printf("local_index0 %d, local_index1 %d, encode %d, localmem %f\\n", local_index_0, local_index_1, encode5_5(local_index_0, local_index_1 ), localmem[encode5_5(local_index_0, local_index_1)]);'))
-                parts.append(StringTemplate('''printf("global_index0 %d, globlal_index1 %d value %f\\n", index_0, index_1, mesh[encode11_11(index_0, index_1)]);'''))
-                parts.append(StringTemplate('''}'''))
+                self.changingIndexofOut(node.body[0].left)
                 parts.extend(node.body)
+
                 #parts.append(StringTemplate('wait();'))
             return MultiNode(parts)
+
+        def changingIndexofOut(self, binaryOp):
+            offsetleft, offsetright = self.local_to_global_index()
+            offsetleft._force_parentheses = True
+            offsetright._force_parentheses = True
+            binaryOp.right.args = [Add(offsetleft, SymbolRef(name="local_index_0")), Add(offsetright, SymbolRef(name="local_index_1"))]
 
         def changingMeshtoLocal(self, object, encodeFunc=None):
             if isinstance(object, BinaryOp):
@@ -159,9 +165,9 @@ class OpenCLCompiler(Compiler):
                 local_location._force_parentheses = True
                 left = ArrayRef(SymbolRef(name="localmem"), local_location)
                 arguments = self.local_to_global_index()
-                sidearg0 = Mod(local_location, Constant(local_reference_array_shape[0]))
+                sidearg0 = Div(local_location, Constant(local_reference_array_shape[0]))
                 sidearg0._force_parentheses = True
-                sidearg1 = Div(local_location, Constant(local_reference_array_shape[1]))
+                sidearg1 = Mod(local_location, Constant(local_reference_array_shape[1]))
                 sidearg1._force_parentheses = True
                 encode_arg0 = Add(arguments[0],sidearg0 )
                 encode_arg1 = Add(arguments[1], sidearg1)
@@ -172,11 +178,9 @@ class OpenCLCompiler(Compiler):
                     ifstatement = StringTemplate(ifstatement)
                     final.append(ifstatement)
                     final.append((Assign(left, right)))
-                    #final.append(StringTemplate('printf("at groupid %d, index %d, %f\\n",group_id, local_id + ' + str(index) + ' , localmem[local_id + ' + str(index) + ']);'))
                     final.append(StringTemplate('}'))
                 else:
                     final.append(Assign(left, right))
-                    #final.append(StringTemplate('printf("at groupid %d, index %d, %f\\n",group_id, local_id + ' +  str(index) + ' , localmem[local_id + ' + str(index) + ']);'))
                 index+= localSize
             return final
 
@@ -184,9 +188,9 @@ class OpenCLCompiler(Compiler):
         def local_to_global_index(self):
             gid_x = self.packed_shape[0] / self.local_work_size[0]
             gid_y = self.packed_shape[1] / self.local_work_size[1]
-            group0 = Mod(SymbolRef('group_id'), Constant(gid_x))
+            group0 = Div(SymbolRef('group_id'), Constant(gid_x))
             group0._force_parentheses = True
-            group1 = Div(SymbolRef('group_id'), Constant(gid_y))
+            group1 = Mod(SymbolRef('group_id'), Constant(gid_y))
             group1._force_parentheses = True
             offset0 = Mul(group0, Constant(self.local_work_size[0]))
             offset1 = Mul(group1, Constant(self.local_work_size[1]))
@@ -217,7 +221,7 @@ class OpenCLCompiler(Compiler):
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None):
+                     _hash=None, context=None, local=False, loop=1):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
@@ -233,6 +237,8 @@ class OpenCLCompiler(Compiler):
             self.context = context
             self.global_work_size = 0
             self.local_work_size = 0
+            self.local = local
+            self.loop = loop
 
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
             format_string = 'wgid %03d gid %04d'
@@ -414,7 +420,7 @@ class OpenCLCompiler(Compiler):
                 )
             )
 
-    def _post_process(self, original, compiled, index_name, **kwargs):
+    def _post_process(self, original, compiled, index_name, local=False, loop=1):
         return self.LazySpecializedKernel(
             py_ast=compiled,
             original=original,
@@ -422,5 +428,7 @@ class OpenCLCompiler(Compiler):
             index_name=index_name,
             target_names=[stencil.primary_mesh for stencil in original.body if hasattr(stencil, "primary_mesh")],
             _hash=hash(original),
-            context=self.context
+            context=self.context,
+            local=local,
+            loop=loop
         )
