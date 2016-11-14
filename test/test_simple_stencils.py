@@ -7,7 +7,8 @@ from snowflake_opencl.util import print_mesh
 
 from snowflake.nodes import StencilComponent, WeightArray, Stencil, SparseWeightArray
 
-from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
+from snowflake_opencl.compiler import OpenCLCompiler
+from snowflake_opencl.compiler import NDBuffer
 
 __author__ = 'Chick Markley chick@eecs.berkeley.edu U.C. Berkeley'
 
@@ -92,7 +93,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_2d_jacobi(self):
-        size = 11
+        size = 10
         import logging
         logging.basicConfig(level=20)
 
