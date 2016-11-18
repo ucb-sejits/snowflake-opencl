@@ -47,12 +47,12 @@ class TestComplexStencils(unittest.TestCase):
         red_iteration_space2 = RectangularDomain(((2, -1, 2), (2, -1, 2)))
         red_iteration_space = red_iteration_space1 + red_iteration_space2
         # red_iteration_space = red_iteration_space1
-        red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='out')
+        red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='mesh')
 
         black_iteration_space1 = RectangularDomain(((1, -2, 2), (2, -1, 2)))
         black_iteration_space2 = RectangularDomain(((2, -1, 2), (1, -2, 2)))
         black_iteration_space = black_iteration_space1 + black_iteration_space2
-        black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='out')
+        black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='mesh')
 
         stencil_group = StencilGroup([red_stencil, black_stencil])
         # stencil_group = StencilGroup([red_stencil])
