@@ -1,6 +1,7 @@
 import ctypes
 import operator
 import pycl as cl
+import ast
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div
@@ -15,7 +16,7 @@ from ctree.types import get_ctype
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-
+import math
 from snowflake_opencl.ocl_tiler import OclTiler
 
 __author__ = 'dorthy luu'
@@ -31,6 +32,8 @@ class NDBuffer(object):
         self.buffer, evt = cl.buffer_from_ndarray(queue, ary)
         if blocking:
             evt.wait()
+
+
 
 class OpenCLCompiler(Compiler):
 
@@ -74,12 +77,12 @@ class OpenCLCompiler(Compiler):
                 total_work_dims.append(tuple(work_dims))
                 total_strides.append(strides)
                 total_lows.append(lows)
-
+            localmem = """__local float localmem[""" + str(reduce(operator.mul, local_tiler.calculate_local_reference_array_shape())) + """];"""
             # get_global_id(0)
             parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
                      Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
                      Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                     StringTemplate("""__local float localmem[25];""")]
+                     StringTemplate(localmem)]
             #get local_id(0)
             # initialize index variables
             parts.extend(
@@ -114,15 +117,14 @@ class OpenCLCompiler(Compiler):
                     for statement in node.body
                     ]
                 node.body = new_body
-                parts.extend(self.local_to_global_copy())
-                local_reference_array_shape = self.calculate_local_reference_array_shape()
+                parts.extend(self.local_to_global_copy(local_tiler.calculate_local_reference_array_shape()))
+                local_reference_array_shape = local_tiler.calculate_local_reference_array_shape()
                 parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
                 encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
                 self.changingMeshtoLocal(node.body[0].right, encodeFunc)
                 self.changingIndexofOut(node.body[0].left)
                 parts.extend(node.body)
 
-                #parts.append(StringTemplate('wait();'))
             return MultiNode(parts)
 
         def changingIndexofOut(self, binaryOp):
@@ -147,17 +149,9 @@ class OpenCLCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
-        def calculate_local_reference_array_shape(self):
-            ghost_size = self.reference_array_shape[0] - self.packed_shape[0]
-            local_reference_array_shape = []
-            for x in self.local_work_size:
-                local_reference_array_shape.append(x + ghost_size)
-            return local_reference_array_shape
-
-        def local_to_global_copy(self):
+        def local_to_global_copy(self, local_reference_array_shape):
             final = []
             localSize = reduce(operator.mul, self.local_work_size)
-            local_reference_array_shape = self.calculate_local_reference_array_shape()
             copyingSize = reduce(operator.mul, local_reference_array_shape)
             index = 0
             while index < copyingSize:
@@ -218,6 +212,86 @@ class OpenCLCompiler(Compiler):
             # this returns None instead of an int...
             return self._c_function(*true_args)
 
+    # class PencilOclTiler(OclTiler):
+
+
+    class PencilModelSpaceExpander(CCompiler.IterationSpaceExpander):
+        def __init__(self, index_name, reference_array_shape, tiler, local=False):
+            self.packed_shape = tiler.packed_iteration_shape
+            self.local_work_size = tiler.local_work_size
+            super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
+
+        def make_low(self, floor, dimension):
+            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
+
+        def make_high(self, ceiling, dimension):
+            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
+
+        def visit_IterationSpace(self, node):
+            node = self.generic_visit(node)
+            total_work_dims, total_strides, total_lows = [], [], []
+            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.packed_shape)
+            local_tiler = OclTiler(self.local_work_size, node, force_local_work_size=self.local_work_size)
+            for space in node.space.spaces:
+                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
+                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
+                strides = space.stride
+                work_dims = []
+
+                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
+                    work_dims.append((high - low + stride - 1) / stride)
+
+                total_work_dims.append(tuple(work_dims))
+                total_strides.append(strides)
+                total_lows.append(lows)
+            localmem = """_local float localmem[""" + str(
+                reduce(operator.mul, self.calculate_local_reference_array_shape())) + """];"""
+            # get_global_id(0)
+            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
+                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
+                     Assign(SymbolRef("local_id", ctypes.c_ulong()),
+                            FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
+                     Assign(SymbolRef("group_id", ctypes.c_ulong()),
+                            FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                     StringTemplate(localmem)]
+
+
+    # class PencilModelKernel(CCompiler.LazySpecializedKernel):
+    #     def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
+    #                  _hash=None, context=None, local=False, loop=1):
+    #
+    #         self.__hash = _hash if _hash is not None else hash(py_ast)
+    #         self.names = names
+    #         self.target_names = target_names
+    #         self.index_name = index_name
+    #
+    #         super(OpenCLCompiler.LazySpecializedKernel, self).__init__(
+    #             py_ast, names, target_names, index_name, _hash
+    #         )
+    #
+    #         self.snowflake_ast = original
+    #         self.parent_cls = OpenCLCompiler
+    #         self.context = context
+    #         self.global_work_size = 0
+    #         self.local_work_size = 0
+    #         self.local = local
+    #         self.loop = loop
+    #
+    #     def transform(self, tree, program_config):
+
+
+
+    def meshToPencilBlocks(self, node, arrayname, map):
+
+        if isinstance(node, BinaryOp):
+            if isinstance(node.left, SymbolRef) and node.left.name == arrayname:
+                node.left = SymbolRef(name=map[node.right.args[0].right.value])
+                node.right = node.right.args[1]
+            else:
+                self.meshToPencilBlocks(node.left, arrayname, map)
+                self.meshToPencilBlocks(node.right, arrayname, map)
+    #self.meshToPencilBlocks(c_tree.body[0].body[0], "mesh", {-1: 'q0', 0: 'q1', 1: 'q2'})
+
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
@@ -263,6 +337,24 @@ class OpenCLCompiler(Compiler):
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
+        def best_local_size(self, global_shape, default):
+            local_size = []
+            for x in range(len(global_shape)):
+                factors = []
+                for i in range(1, global_shape[x] + 1):
+                    if global_shape[x] % i == 0:
+                        factors.append(i)
+                if global_shape[x] == 1:
+                    local_size.append(1)
+                elif len(factors) == 2:
+                    local_size.append(min(default[x], factors[1]))
+                else:
+                    local_size.append(min(factors, key=lambda j: abs(j - default[x])))
+            return local_size
+
+
+
+
         def transform(self, tree, program_config):
             """
             The tree is based on a snowflake stencil group which makes it one or more
@@ -271,10 +363,12 @@ class OpenCLCompiler(Compiler):
             :param program_config:
             :return:
             """
+
+
+
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
-            local_work_size = (5, 5)
             self.parent_cls.IndexOpToEncode(name_shape_map).visit(tree)
             c_tree = PyBasicConversions().visit(tree)
 
@@ -282,7 +376,6 @@ class OpenCLCompiler(Compiler):
             for shape in shapes:
                 # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
-                encode_funcs.append(generate_encode_macro('encode' + CCompiler._shape_to_str(local_work_size), local_work_size))
 
             includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
 
@@ -297,15 +390,16 @@ class OpenCLCompiler(Compiler):
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
                 shape = subconfig[target].shape
-
-                tiler = OclTiler(shape, i_space, force_local_work_size=(3,3))
+                tiler = OclTiler(shape, i_space)
                 packed_iteration_shape = tiler.packed_iteration_shape
-
+                default = [max(math.pow(x, 1.0 / len(packed_iteration_shape)), 5) for x in packed_iteration_shape]  # local
+                local_work_size = self.best_local_size(packed_iteration_shape, default)  # local
                 gws = reduce(operator.mul, packed_iteration_shape)
 
-                local_work_size = tiler.local_work_size
+                tiler.local_work_size = local_work_size
+                local_reference_shape = tiler.calculate_local_reference_array_shape()
+                encode_funcs.append(generate_encode_macro('encode' + CCompiler._shape_to_str(local_reference_shape),local_reference_shape))  # local
                 # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
-
                 local_work_size_1d = reduce(operator.mul, local_work_size)
                 print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
