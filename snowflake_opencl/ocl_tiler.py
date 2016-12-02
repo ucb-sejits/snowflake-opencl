@@ -241,3 +241,10 @@ class OclTiler(object):
             return packed_shapes[0]
         else:
             raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
+
+    def calculate_local_reference_array_shape(self):
+        ghost_size = self.reference_shape[0] - self.packed_iteration_shape[0]
+        local_reference_array_shape = []
+        for x in self.local_work_size:
+            local_reference_array_shape.append(x + ghost_size)
+        return local_reference_array_shape
