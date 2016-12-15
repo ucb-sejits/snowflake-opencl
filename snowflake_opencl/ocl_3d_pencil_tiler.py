@@ -6,7 +6,6 @@ from snowflake_opencl.local_size_computer import LocalSizeComputer
 from ctree.c.nodes import Mod, Div, Constant, Add, Mul, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile, LtE, And, If
 
-
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
@@ -17,16 +16,17 @@ class Ocl3DPencilTiler(object):
     appropriate style.  Linearize the various components to 1-d for now, so the
     The compiler using this can work in arbitrary numbers of dimensions
     """
-    # TODO: Still need a more elegant way to manage multi-domain iteration spaces
-    # TODO: Make striding work correctly
-    # TODO: Confirm that guards work correctly with striding
-    def __init__(self, reference_shape, iteration_space, context=None, force_local_work_size=None):
-        self.reference_shape = reference_shape
+    def __init__(self, underlying_shape, iteration_space, stencil, context=None, force_local_work_size=None):
+        self.underlying_shape = underlying_shape
         self.iteration_space = iteration_space
         self.context = context
-        self.dimensions = len(self.reference_shape)
+        self.dimensions = len(self.underlying_shape)
+        self.stencil = stencil
 
-        self.iteration_space_shape = self.get_iteration_space_shape()
+        self.iteration_space_shape = self.iteration_space_to_shape(self.inner_iterations_space)
+
+        self.inner_tiled_shape = tuple(x for x in self.iteration_space_shape[1:])
+
         self.packed_iteration_shape = self.get_packed_shape()
         self.local_work_size = force_local_work_size if force_local_work_size is not None \
             else LocalSizeComputer(self.packed_iteration_shape, self.context).compute_local_size_bulky()
@@ -37,8 +37,6 @@ class Ocl3DPencilTiler(object):
         self.virtual_global_size = tuple(x * y for x, y in zip(self.local_work_size, self.tiling_shape))
         self.global_size_1d = reduce(operator.mul, self.virtual_global_size, 1)
         self.local_work_size_1d = reduce(operator.mul, self.local_work_size, 1)
-
-
 
     def global_index_to_coord(self, index_1d, iteration_space_index=0):
         tile_coord = self.get_tile_coordinates(index_1d)
@@ -178,6 +176,23 @@ class Ocl3DPencilTiler(object):
                 ])
         return tiling_shape
 
+    def make_low(self, floor, dimension):
+        """
+        if the :param floor is negative it is relative to the end of the space in the given :param dimension
+        convert it to a end to an absolute offset
+        :return: an absolute
+        """
+        return floor if floor >= 0 else self.underlying_shape[dimension] + floor
+
+    def make_high(self, ceiling, dimension):
+        """
+        if the :param ceiling is negative it is relative to the end of the space in the given :param dimension
+        convert it to a end to an absolute offset.
+        This method differs from the low in that the ceiling value -1 is
+        :return: an absolute
+        """
+        return ceiling if ceiling > 0 else self.underlying_shape[dimension] + ceiling
+
     def get_packed_shape(self):
         """
         compact the iteration space by fixing highs and lows as necessary and then
@@ -189,15 +204,9 @@ class Ocl3DPencilTiler(object):
         """
         packed_shapes = []
 
-        def make_low(floor, dimension):
-            return floor if floor >= 0 else self.reference_shape[dimension] + floor
-
-        def make_high(ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
-
         for space in self.iteration_space.space.spaces:
-            lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
-            highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+            lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
+            highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
             strides = space.stride
             packed_shapes.append(
                 tuple(
@@ -211,7 +220,7 @@ class Ocl3DPencilTiler(object):
         else:
             raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
 
-    def get_iteration_space_shape(self):
+    def iteration_space_to_shape(self, spaces):
         """
         compact the iteration space by fixing highs and lows as necessary and then
         squishing out the strides.
@@ -222,15 +231,9 @@ class Ocl3DPencilTiler(object):
         """
         packed_shapes = []
 
-        def make_low(floor, dimension):
-            return floor if floor >= 0 else self.reference_shape[dimension] + floor
-
-        def make_high(ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_shape[dimension] + ceiling
-
-        for space in self.iteration_space.space.spaces:
-            lows = tuple(make_low(low, dim) for dim, low in enumerate(space.low))
-            highs = tuple(make_high(high, dim) for dim, high in enumerate(space.high))
+        for space in spaces:
+            lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
+            highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
             strides = space.stride
             packed_shapes.append(
                 tuple(
@@ -243,3 +246,9 @@ class Ocl3DPencilTiler(object):
             return packed_shapes[0]
         else:
             raise NotImplementedError("Different number of threads per space in IterationSpace not implemented.")
+
+
+class DimensionInfo:
+    def __init__(self, space, dimension, underlying_shape):
+        self.low = space
+

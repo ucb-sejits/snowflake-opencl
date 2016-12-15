@@ -24,10 +24,10 @@ from snowflake_opencl.ocl_tiler import OclTiler
 __author__ = 'chick markley, seunghwan choi'
 
 
-class OpenCLCompiler(Compiler):
+class PencilCompiler(Compiler):
 
     def __init__(self, context, device, local=False,loop=1):
-        super(OpenCLCompiler, self).__init__()
+        super(PencilCompiler, self).__init__()
         self.context = context
         self.device = device
         self.local = local
@@ -37,17 +37,66 @@ class OpenCLCompiler(Compiler):
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, tiler):
+        def __init__(self, index_name, reference_array_shape, tiler, stencil, device):
             self.tiler = tiler
             self.packed_shape = tiler.packed_iteration_shape
             self.local_work_size = tiler.local_work_size
-            super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
+            self.stencil_node = stencil.op_tree
+            self.ghost_size = tuple((x - 1)/2 for x in self.stencil_node.weights.shape)
+            self.device = device
+            self.use_doubles = "cl_khr_fp64" in self.device.extensions
+            super(PencilCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
+
+        def number_size(self):
+            return 8 if self.use_doubles else 4
+
+        def real_name(self):
+            return "double" if self.use_doubles else "float"
 
         def make_low(self, floor, dimension):
             return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
 
         def make_high(self, ceiling, dimension):
             return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
+
+        def create_local_memory_declaration(self):
+            None
+
+        def get_local_memory_declarations(self):
+            """
+            assumes for the present that the problem is symmetric
+
+            compute the following:
+                how many numbers can local memory hold
+                divide that by the number of planes needed
+                take the square root of that to figure the edge size of the tile
+                for now take the largest power of 2 that so things fit nice (our problem is almost always sized
+                as a power of 2
+
+            created a local memory buffer for each plane
+            and create a pointer pointing to each plane
+            :return: a StringTemplate with the opencl code for the planes
+            """
+
+            ghost_dim = self.ghost_size[0] * 2
+            max_reals_in_localmem = self.device.local_mem_size / self.number_size()
+            planes = self.stencil_node.weights.shape[0]
+            max_real_nums_per_plane = max_reals_in_localmem / planes
+            max_size_per_dim = math.sqrt(max_real_nums_per_plane)
+            log_of_edge = int(math.log(max_size_per_dim - ghost_dim, 2))
+            tile_edge = int(math.pow(2, log_of_edge)) + ghost_dim
+            reals_per_plane = tile_edge * tile_edge
+
+            buffers = ["__local {} local_buf_{}[{}];".format(self.real_name(), n, reals_per_plane) for n in range(planes)]
+            pointers = ["__local {}* plane_{} = local_buf_{};".format(self.real_name(), n, n) for n in range(planes)]
+            string = '\n'.join(buffers + pointers)
+
+            self.plane_size = (tile_edge, tile_edge)
+            self.local_work_size = (tile_edge - ghost_dim, tile_edge - ghost_dim)
+            self.local_work_size_1d = reduce(operator.mul, self.local_work_size)
+
+            return StringTemplate(string)
+
 
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
@@ -66,12 +115,15 @@ class OpenCLCompiler(Compiler):
                 total_work_dims.append(tuple(work_dims))
                 total_strides.append(strides)
                 total_lows.append(lows)
+
+            memory_declarations = self.get_local_memory_declarations()
+
             localmem = """__local float localmem[""" + str(reduce(operator.mul, tiler.calculate_local_reference_array_shape())) + """];"""
             # get_global_id(0)
             parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
                      Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
                      Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                     StringTemplate(localmem)]
+                     memory_declarations]
             #get local_id(0)
             # initialize index variables
             parts.extend(
@@ -138,6 +190,9 @@ class OpenCLCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
+        def fill_planes(self):
+            None
+
         def local_to_global_copy(self, local_reference_array_shape):
             final = []
             localSize = reduce(operator.mul, self.local_work_size)
@@ -188,7 +243,7 @@ class OpenCLCompiler(Compiler):
             self.kernels = kernels
             self._c_function = None
             self.entry_point_name = None
-            super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
+            super(PencilCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
             self._c_function = self._compile(entry_point_name, project_node, entry_point_typesig)
@@ -202,71 +257,6 @@ class OpenCLCompiler(Compiler):
             return self._c_function(*true_args)
 
     # class PencilOclTiler(OclTiler):
-
-
-    class PencilModelSpaceExpander(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, tiler, local=False):
-            self.packed_shape = tiler.packed_iteration_shape
-            self.local_work_size = tiler.local_work_size
-            super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
-
-        def make_low(self, floor, dimension):
-            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
-
-        def make_high(self, ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-        def visit_IterationSpace(self, node):
-            node = self.generic_visit(node)
-            total_work_dims, total_strides, total_lows = [], [], []
-            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.packed_shape)
-            local_tiler = OclTiler(self.local_work_size, node, force_local_work_size=self.local_work_size)
-            for space in node.space.spaces:
-                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
-                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
-                strides = space.stride
-                work_dims = []
-
-                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
-                    work_dims.append((high - low + stride - 1) / stride)
-
-                total_work_dims.append(tuple(work_dims))
-                total_strides.append(strides)
-                total_lows.append(lows)
-            localmem = """_local float localmem[""" + str(
-                reduce(operator.mul, self.calculate_local_reference_array_shape())) + """];"""
-            # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
-                     Assign(SymbolRef("local_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
-                     Assign(SymbolRef("group_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                     StringTemplate(localmem)]
-
-
-    # class PencilModelKernel(CCompiler.LazySpecializedKernel):
-    #     def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-    #                  _hash=None, device=None, local=False, loop=1):
-    #
-    #         self.__hash = _hash if _hash is not None else hash(py_ast)
-    #         self.names = names
-    #         self.target_names = target_names
-    #         self.index_name = index_name
-    #
-    #         super(OpenCLCompiler.LazySpecializedKernel, self).__init__(
-    #             py_ast, names, target_names, index_name, _hash
-    #         )
-    #
-    #         self.snowflake_ast = original
-    #         self.parent_cls = OpenCLCompiler
-    #         self.device = device
-    #         self.global_work_size = 0
-    #         self.local_work_size = 0
-    #         self.local = local
-    #         self.loop = loop
-    #
-    #     def transform(self, tree, program_config):
 
 
 
@@ -291,12 +281,12 @@ class OpenCLCompiler(Compiler):
             self.target_names = target_names
             self.index_name = index_name
 
-            super(OpenCLCompiler.LazySpecializedKernel, self).__init__(
+            super(PencilCompiler.LazySpecializedKernel, self).__init__(
                 py_ast, names, target_names, index_name, _hash
             )
 
             self.snowflake_ast = original
-            self.parent_cls = OpenCLCompiler
+            self.parent_cls = PencilCompiler
             self.context = context
             self.device = device
             self.global_work_size = 0
@@ -351,8 +341,6 @@ class OpenCLCompiler(Compiler):
             :return:
             """
 
-
-
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
@@ -393,7 +381,11 @@ class OpenCLCompiler(Compiler):
                 sub = self.parent_cls.TiledIterationSpaceExpander(
                     self.index_name,
                     shape,
-                    tiler).visit(i_space)
+                    tiler,
+                    stencil_node,
+                    self.device,
+                ).visit(i_space)
+
                 sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
@@ -489,7 +481,7 @@ class OpenCLCompiler(Compiler):
             kernels = []
             for i, f in enumerate(transform_result[1:]):
                 kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" % i])
-            fn = OpenCLCompiler.ConcreteSpecializedKernel(
+            fn = PencilCompiler.ConcreteSpecializedKernel(
                 self.context, self.global_work_size, self.local_work_size, kernels)
             func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
                         cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)

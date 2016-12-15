@@ -33,13 +33,13 @@ class TestSimpleStencils(unittest.TestCase):
         in_buf = NDBuffer(queue, buffer_in)
         out_buf = NDBuffer(queue, buffer_out)
 
-        sobel_x_component = StencilComponent('arr', SparseWeightArray({(1, ): 1.0}))
+        sobel_x_component = StencilComponent('mesh', SparseWeightArray({(1, ): 1.0}))
         sobel_total = Stencil(
             sobel_x_component,
             'out',
             ((1, -1, 1), ))
 
-        compiler = OpenCLCompiler(ctx)
+        compiler = OpenCLCompiler(ctx, device)
         sobel_ocl = compiler.compile(sobel_total)
         sobel_ocl(out_buf, in_buf)
 
@@ -73,14 +73,14 @@ class TestSimpleStencils(unittest.TestCase):
         in_buf = NDBuffer(queue, lena_in)
         out_buf = NDBuffer(queue, lena_out)
 
-        sobel_x_component = StencilComponent('arr', WeightArray([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]))
-        sobel_y_component = StencilComponent('arr', WeightArray([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]))
+        sobel_x_component = StencilComponent('mesh', WeightArray([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]))
+        sobel_y_component = StencilComponent('mesh', WeightArray([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]))
         sobel_total = Stencil(
             (sobel_x_component * sobel_x_component) + (sobel_y_component * sobel_y_component),
             'out',
             ((1, -1, 1), (1, -1, 1)))
 
-        compiler = OpenCLCompiler(ctx)
+        compiler = OpenCLCompiler(ctx, device)
         sobel_ocl = compiler.compile(sobel_total)
         sobel_ocl(out_buf, in_buf)
 
@@ -123,7 +123,7 @@ class TestSimpleStencils(unittest.TestCase):
 
         jacobi_stencil = Stencil(sc, 'out', ((1, -1, 1), (1, -1, 1)), primary_mesh='out')
 
-        compiler = OpenCLCompiler(ctx)
+        compiler = OpenCLCompiler(ctx, device)
         jacobi_operator = compiler.compile(jacobi_stencil)
         jacobi_operator(out_buf, in_buf)
 
@@ -142,7 +142,7 @@ class TestSimpleStencils(unittest.TestCase):
         print("done")
 
     def test_3d_jacobi(self):
-        size = 19
+        size = 34
         import logging
         logging.basicConfig(level=20)
 
@@ -184,7 +184,7 @@ class TestSimpleStencils(unittest.TestCase):
 
         jacobi_stencil = Stencil(sc, 'out', ((1, size-1, 1),) * 3, primary_mesh='out')
 
-        compiler = OpenCLCompiler(ctx)
+        compiler = OpenCLCompiler(ctx, device)
         jacobi_operator = compiler.compile(jacobi_stencil)
         jacobi_operator(out_buf, in_buf)
 
