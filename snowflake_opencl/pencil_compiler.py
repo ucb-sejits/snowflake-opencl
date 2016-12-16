@@ -38,21 +38,30 @@ class PencilCompiler(Compiler):
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, tiler, stencil, device):
-            self.tiler = tiler
-            self.packed_shape = tiler.packed_iteration_shape
-            self.local_work_size = tiler.local_work_size
+        def __init__(self, index_name, reference_array_shape, stencil, device):
             self.stencil_node = stencil.op_tree
             self.ghost_size = tuple((x - 1)/2 for x in self.stencil_node.weights.shape)
             self.device = device
             self.use_doubles = "cl_khr_fp64" in self.device.extensions
+
             self.planes = self.stencil_node.weights.shape[0]
+
+            # compute_plane_info sets the following instance vars
+            self.plane_size = None
+            self.plane_size_1d = None
+            self.local_work_size = None
+            self.local_work_size_1d = None
+            self.compute_plane_info()
+
+            self.global_work_size = None
+            self.global_work_size_1d = None
+
             super(PencilCompiler.PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
 
         def number_size(self):
             return 8 if self.use_doubles else 4
 
-        def real_name(self):
+        def number_type(self):
             return "double" if self.use_doubles else "float"
 
         def make_low(self, floor, dimension):
@@ -61,7 +70,7 @@ class PencilCompiler(Compiler):
         def make_high(self, ceiling, dimension):
             return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
 
-        def get_local_memory_declarations(self):
+        def compute_plane_info(self):
             """
             assumes for the present that the problem is symmetric
 
@@ -71,35 +80,36 @@ class PencilCompiler(Compiler):
                 take the square root of that to figure the edge size of the tile
                 for now take the largest power of 2 that so things fit nice (our problem is almost always sized
                 as a power of 2
+            """
+            max_reals_in_localmem = self.device.local_mem_size / self.number_size()
+            max_real_nums_per_plane = max_reals_in_localmem / self.planes
+            max_size_per_dim = math.sqrt(max_real_nums_per_plane)
 
+            log_of_edge = int(math.log(max_size_per_dim - (self.ghost_size[0] * 2), 2))
+            tile_edge = int(math.pow(2, log_of_edge)) + (self.ghost_size[0] * 2)
+
+            self.plane_size = (tile_edge, tile_edge)
+            self.plane_size_1d = reduce(operator.mul, self.plane_size)
+
+            self.local_work_size = (tile_edge - (self.ghost_size[0] * 2), tile_edge - (self.ghost_size[0] * 2))
+            self.local_work_size_1d = reduce(operator.mul, self.local_work_size)
+
+        def get_local_memory_declarations(self):
+            """
             created a local memory buffer for each plane
             and create a pointer pointing to each plane
             :return: a StringTemplate with the opencl code for the planes
             """
-
-            ghost_dim = self.ghost_size[0] * 2
-            max_reals_in_localmem = self.device.local_mem_size / self.number_size()
-            planes = self.planes
-            max_real_nums_per_plane = max_reals_in_localmem / planes
-            max_size_per_dim = math.sqrt(max_real_nums_per_plane)
-            log_of_edge = int(math.log(max_size_per_dim - ghost_dim, 2))
-            tile_edge = int(math.pow(2, log_of_edge)) + ghost_dim
-            reals_per_plane = tile_edge * tile_edge
-
             buffers = [
-                "__local {} local_buf_{}[{}];".format(self.real_name(), n, reals_per_plane)
-                for n in range(planes)
+                "__local {} local_buf_{}[{}];".format(self.number_type(), n, self.plane_size_1d)
+                for n in range(self.planes)
                 ]
             pointers = [
-                "__local {}* plane_{} = local_buf_{};".format(self.real_name(), n, n)
-                for n in range(planes)
+                "__local {}* plane_{} = local_buf_{};".format(self.number_type(), n, n)
+                for n in range(self.planes)
                 ]
-            pointers += ["__local {}* temp_plane;".format(self.real_name())]
+            pointers += ["__local {}* temp_plane;".format(self.number_type())]
             string = '\n'.join(buffers + pointers)
-
-            self.plane_size = (tile_edge, tile_edge)
-            self.local_work_size = (tile_edge - ghost_dim, tile_edge - ghost_dim)
-            self.local_work_size_1d = reduce(operator.mul, self.local_work_size)
 
             return StringTemplate(string)
 
@@ -108,7 +118,7 @@ class PencilCompiler(Compiler):
             node = self.generic_visit(node)
 
             total_work_dims, total_strides, total_lows = [], [], []
-            tiler = self.tiler
+
             for space in node.space.spaces:
                 lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
                 highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
@@ -122,16 +132,20 @@ class PencilCompiler(Compiler):
                 total_strides.append(strides)
                 total_lows.append(lows)
 
+            self.global_work_size = total_work_dims[1:]
+            self.global_work_size_1d = reduce(operator.mul, self.ghost_size)
+
             memory_declarations = self.get_local_memory_declarations()
 
             # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
-                     Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
-                     Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                     memory_declarations]
-
-            for plane_num in range(self.planes):
-                None
+            parts = [
+                memory_declarations,
+                Assign(SymbolRef("packed_global_id_0", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
+                Assign(SymbolRef("packed_global_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(1)])),
+                Assign(SymbolRef("packed_local_id_0", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
+                Assign(SymbolRef("packed_local_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(1)])),
+                Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+            ]
 
             # initialize index variables
             parts.extend(
@@ -142,33 +156,57 @@ class PencilCompiler(Compiler):
                 SymbolRef("{}_{}".format("local_" + self.index_name, dim), ctypes.c_ulong())
                 for dim in range(len(self.reference_array_shape)))
 
+            # construct offset arrays for each iterations space
+            arrays = []
+            for dim in range(3):
+                offsets = []
+                strides = []
+                for space in node.space.spaces:
+                    offsets.append(space.low[dim])
+                    strides.append(space.stride[dim])
+                arrays.append(
+                    Assign(
+                        SymbolRef("dim_{}_offsets".format(dim), ctypes.c_ulong()),
+                        StringTemplate('{' + ", ".join([str(x) for x in offsets]) + '}')
+                    )
+                )
+                arrays.append(
+                    Assign(
+                        SymbolRef("dim_{}_strides".format(dim), ctypes.c_ulong()),
+                        StringTemplate('{' + ", ".join([str(x) for x in offsets]) + '}')
+                    )
+                )
+
+            parts.extend(arrays)
+
+
             # calculate each index inline
             for space in range(len(node.space.spaces)):
                 # indices = self.build_index_variables(SymbolRef("global_id"),
                 #                                    shape=Vector(highs) - Vector(lows),
                 #                                    multipliers=total_strides[space],
                 #                                    offsets=total_lows[space])
-                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
-                                                                       iteration_space_index=space)
-                local_indices = tiler.get_local_coordinates_expression(SymbolRef("local_id"))
-
-                for dim in range(len(self.reference_array_shape)):
-                    parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
-                for dim in range(len(self.reference_array_shape)):
-                    parts.append(Assign(SymbolRef("{}_{}".format("local_" + self.index_name, dim)), local_indices[dim]))
-
+                # indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
+                #                                                        iteration_space_index=space)
+                # local_indices = tiler.get_local_coordinates_expression(SymbolRef("local_id"))
+                #
+                # for dim in range(len(self.reference_array_shape)):
+                #     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim + 1)), indices[dim]))
+                # for dim in range(len(self.reference_array_shape)):
+                #     parts.append(Assign(SymbolRef("{}_{}".format("local_" + self.index_name, dim)), local_indices[dim]))
+                #
                 # for dim in range(tile.dim)
-                new_body = [
-                    tiler.add_guards_if_necessary(statement)
-                    for statement in node.body
-                    ]
-                node.body = new_body
-                parts.extend(self.local_to_global_copy(tiler.calculate_local_reference_array_shape()))
-                local_reference_array_shape = tiler.calculate_local_reference_array_shape()
-                parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
-                encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
-                self.changingMeshtoLocal(node.body[0].body[0].right, encodeFunc)
-                self.changingIndexofOut(node.body[0].body[0].left)
+                # new_body = [
+                #     tiler.add_guards_if_necessary(statement)
+                #     for statement in node.body
+                #     ]
+                # node.body = new_body
+                # parts.extend(self.local_to_global_copy(tiler.calculate_local_reference_array_shape()))
+                # local_reference_array_shape = tiler.calculate_local_reference_array_shape()
+                # parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
+                # encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
+                # self.changingMeshtoLocal(node.body[0].body[0].right, encodeFunc)
+                # self.changingIndexofOut(node.body[0].body[0].left)
                 parts.extend(node.body)
 
             return MultiNode(parts)
@@ -333,21 +371,6 @@ class PencilCompiler(Compiler):
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
-        def best_local_size(self, global_shape, default):
-            local_size = []
-            for x in range(len(global_shape)):
-                factors = []
-                for i in range(1, global_shape[x] + 1):
-                    if global_shape[x] % i == 0:
-                        factors.append(i)
-                if global_shape[x] == 1:
-                    local_size.append(1)
-                elif len(factors) == 2:
-                    local_size.append(min(default[x], factors[1]))
-                else:
-                    local_size.append(min(factors, key=lambda j: abs(j - default[x])))
-            return local_size
-
         def transform(self, tree, program_config):
             """
             The tree is a snowflake stencil group which makes it one or more
@@ -380,28 +403,29 @@ class PencilCompiler(Compiler):
             for kernel_number, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
-                shape = subconfig[target].shape
-                tiler = OclTiler(shape, i_space, device=self.device)
+                kernel_builder = self.parent_cls.PencilKernelBuilder(
+                    self.index_name,
+                    subconfig[target].shape,
+                    stencil_node,
+                    self.device,
+                )
 
-                local_reference_shape = tiler.calculate_local_reference_array_shape()
+                kernel_body = kernel_builder.visit(i_space)
+                kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
+
+                local_reference_shape = kernel_builder.plane_size
                 new_encode_func = generate_encode_macro(
                     'encode' + CCompiler._shape_to_str(local_reference_shape),local_reference_shape
                 )
                 if new_encode_func not in encode_funcs:
                     encode_funcs.append(new_encode_func)  # local
 
-                local_work_size_1d = tiler.local_work_size_1d
-                print("local_work_size {} local_work_size_1d {}".format(tiler.local_work_size, local_work_size_1d))
-
-                kernel_body = self.parent_cls.PencilKernelBuilder(
-                    self.index_name,
-                    shape,
-                    tiler,
-                    stencil_node,
-                    self.device,
-                ).visit(i_space)
-
-                kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
+                local_work_size_1d = kernel_builder.local_work_size_1d
+                print(
+                    "local_work_size {} local_work_size_1d {}".format(
+                        kernel_builder.local_work_size, local_work_size_1d
+                    )
+                )
 
                 # Uncomment the following line to put some printf showing index values at runtime
                 # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape))
@@ -423,15 +447,15 @@ class PencilCompiler(Compiler):
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
-                gws = tiler.global_size_1d
+                gws = kernel_builder.global_work_size_1d
 
                 # declare new global and local work size arrays if necessary
-                if gws % local_work_size_1d > 0:
-                    expanded_packed = [
-                        (int(tiler.packed_iteration_shape[dim] / tiler.local_work_size[dim]) + 1) * tiler.local_work_size[dim]
-                        for dim in range(len(tiler.local_work_size))
-                    ]
-                    gws = reduce(operator.mul, expanded_packed)
+                # if gws % local_work_size_1d > 0:
+                #     expanded_packed = [
+                #         (int(kernel_builder.packed_iteration_shape[dim] / kernel_builder.local_work_size[dim]) + 1) * kernel_builder.local_work_size[dim]
+                #         for dim in range(len(kernel_builder.local_work_size))
+                #     ]
+                #     gws = reduce(operator.mul, expanded_packed)
                 if gws not in gws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))

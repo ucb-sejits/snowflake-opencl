@@ -13,7 +13,7 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 128
+    size = 130
     import logging
     logging.basicConfig(level=20)
 
@@ -63,8 +63,8 @@ if __name__ == '__main__':
     buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
     out_evt.wait()
 
-    print("Input " + "=" * 80)
-    print_mesh(buffer_in)
-    print("Output" + "=" * 80)
-    print_mesh(buffer_out)
+    # print("Input " + "=" * 80)
+    # print_mesh(buffer_in)
+    # print("Output" + "=" * 80)
+    # print_mesh(buffer_out)
     print("done")
