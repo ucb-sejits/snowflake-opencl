@@ -23,20 +23,21 @@ from snowflake_opencl.ocl_tiler import OclTiler
 
 __author__ = 'chick markley, seunghwan choi'
 
+# TODO: move tiler computation inside of space expander
+# TODO: fill planes
+
 
 class PencilCompiler(Compiler):
 
-    def __init__(self, context, device, local=False,loop=1):
+    def __init__(self, context, device):
         super(PencilCompiler, self).__init__()
         self.context = context
         self.device = device
-        self.local = local
-        self.loop = loop
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
-    class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
+    class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         def __init__(self, index_name, reference_array_shape, tiler, stencil, device):
             self.tiler = tiler
             self.packed_shape = tiler.packed_iteration_shape
@@ -45,7 +46,8 @@ class PencilCompiler(Compiler):
             self.ghost_size = tuple((x - 1)/2 for x in self.stencil_node.weights.shape)
             self.device = device
             self.use_doubles = "cl_khr_fp64" in self.device.extensions
-            super(PencilCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
+            self.planes = self.stencil_node.weights.shape[0]
+            super(PencilCompiler.PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
 
         def number_size(self):
             return 8 if self.use_doubles else 4
@@ -58,9 +60,6 @@ class PencilCompiler(Compiler):
 
         def make_high(self, ceiling, dimension):
             return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-        def create_local_memory_declaration(self):
-            None
 
         def get_local_memory_declarations(self):
             """
@@ -80,15 +79,22 @@ class PencilCompiler(Compiler):
 
             ghost_dim = self.ghost_size[0] * 2
             max_reals_in_localmem = self.device.local_mem_size / self.number_size()
-            planes = self.stencil_node.weights.shape[0]
+            planes = self.planes
             max_real_nums_per_plane = max_reals_in_localmem / planes
             max_size_per_dim = math.sqrt(max_real_nums_per_plane)
             log_of_edge = int(math.log(max_size_per_dim - ghost_dim, 2))
             tile_edge = int(math.pow(2, log_of_edge)) + ghost_dim
             reals_per_plane = tile_edge * tile_edge
 
-            buffers = ["__local {} local_buf_{}[{}];".format(self.real_name(), n, reals_per_plane) for n in range(planes)]
-            pointers = ["__local {}* plane_{} = local_buf_{};".format(self.real_name(), n, n) for n in range(planes)]
+            buffers = [
+                "__local {} local_buf_{}[{}];".format(self.real_name(), n, reals_per_plane)
+                for n in range(planes)
+                ]
+            pointers = [
+                "__local {}* plane_{} = local_buf_{};".format(self.real_name(), n, n)
+                for n in range(planes)
+                ]
+            pointers += ["__local {}* temp_plane;".format(self.real_name())]
             string = '\n'.join(buffers + pointers)
 
             self.plane_size = (tile_edge, tile_edge)
@@ -118,13 +124,15 @@ class PencilCompiler(Compiler):
 
             memory_declarations = self.get_local_memory_declarations()
 
-            localmem = """__local float localmem[""" + str(reduce(operator.mul, tiler.calculate_local_reference_array_shape())) + """];"""
             # get_global_id(0)
             parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
                      Assign(SymbolRef("local_id", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
                      Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
                      memory_declarations]
-            #get local_id(0)
+
+            for plane_num in range(self.planes):
+                None
+
             # initialize index variables
             parts.extend(
                 SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
@@ -133,9 +141,6 @@ class PencilCompiler(Compiler):
             parts.extend(
                 SymbolRef("{}_{}".format("local_" + self.index_name, dim), ctypes.c_ulong())
                 for dim in range(len(self.reference_array_shape)))
-            # parts.extend(
-            #     SymbolRef("*localmem", ctypes.c_float(), _local=True)
-            # )
 
             # calculate each index inline
             for space in range(len(node.space.spaces)):
@@ -190,8 +195,34 @@ class PencilCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
-        def fill_planes(self):
-            None
+        def fill_plane(self, plane_number):
+            final = []
+            localSize = reduce(operator.mul, self.local_work_size)
+            copyingSize = reduce(operator.mul, local_reference_array_shape)
+            index = 0
+            while index < copyingSize:
+                local_location = Add(SymbolRef(name="local_id"), Constant(index))
+                local_location._force_parentheses = True
+                left = ArrayRef(SymbolRef(name="localmem"), local_location)
+                arguments = self.local_to_global_index()
+                sidearg0 = Div(local_location, Constant(local_reference_array_shape[0]))
+                sidearg0._force_parentheses = True
+                sidearg1 = Mod(local_location, Constant(local_reference_array_shape[1]))
+                sidearg1._force_parentheses = True
+                encode_arg0 = Add(arguments[0],sidearg0 )
+                encode_arg1 = Add(arguments[1], sidearg1)
+                encode = FunctionCall(func=SymbolRef("encode" + str(self.reference_array_shape[0]) + "_" + str(self.reference_array_shape[0])), args=[encode_arg0, encode_arg1])
+                right = ArrayRef(SymbolRef(name="mesh"), encode)
+                if index + localSize > copyingSize:
+                    ifstatement = 'if (local_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
+                    ifstatement = StringTemplate(ifstatement)
+                    final.append(ifstatement)
+                    final.append((Assign(left, right)))
+                    final.append(StringTemplate('}'))
+                else:
+                    final.append(Assign(left, right))
+                index += localSize
+            return final
 
         def local_to_global_copy(self, local_reference_array_shape):
             final = []
@@ -256,21 +287,6 @@ class PencilCompiler(Compiler):
             # this returns None instead of an int...
             return self._c_function(*true_args)
 
-    # class PencilOclTiler(OclTiler):
-
-
-
-    def meshToPencilBlocks(self, node, arrayname, map):
-
-        if isinstance(node, BinaryOp):
-            if isinstance(node.left, SymbolRef) and node.left.name == arrayname:
-                node.left = SymbolRef(name=map[node.right.args[0].right.value])
-                node.right = node.right.args[1]
-            else:
-                self.meshToPencilBlocks(node.left, arrayname, map)
-                self.meshToPencilBlocks(node.right, arrayname, map)
-    #self.meshToPencilBlocks(c_tree.body[0].body[0], "mesh", {-1: 'q0', 0: 'q1', 1: 'q2'})
-
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
@@ -334,7 +350,7 @@ class PencilCompiler(Compiler):
 
         def transform(self, tree, program_config):
             """
-            The tree is based on a snowflake stencil group which makes it one or more
+            The tree is a snowflake stencil group which makes it one or more
             Stencil Operations.  This
             :param tree:
             :param program_config:
@@ -361,24 +377,23 @@ class PencilCompiler(Compiler):
 
             # build a bunch of kernels
             #
-            for i, (target, i_space, stencil_node) in enumerate(
+            for kernel_number, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
                 shape = subconfig[target].shape
                 tiler = OclTiler(shape, i_space, device=self.device)
-                # packed_iteration_shape = tiler.packed_iteration_shape
-                # default = [max(math.pow(x, 1.0 / len(packed_iteration_shape)), 5) for x in packed_iteration_shape]  # local
-                # local_work_size = self.best_local_size(packed_iteration_shape, default)  # local
-                # gws = reduce(operator.mul, packed_iteration_shape)
-                #tiler.local_work_size = local_work_size
 
                 local_reference_shape = tiler.calculate_local_reference_array_shape()
-                encode_funcs.append(generate_encode_macro('encode' + CCompiler._shape_to_str(local_reference_shape),local_reference_shape))  # local
-                # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
+                new_encode_func = generate_encode_macro(
+                    'encode' + CCompiler._shape_to_str(local_reference_shape),local_reference_shape
+                )
+                if new_encode_func not in encode_funcs:
+                    encode_funcs.append(new_encode_func)  # local
+
                 local_work_size_1d = tiler.local_work_size_1d
                 print("local_work_size {} local_work_size_1d {}".format(tiler.local_work_size, local_work_size_1d))
 
-                sub = self.parent_cls.TiledIterationSpaceExpander(
+                kernel_body = self.parent_cls.PencilKernelBuilder(
                     self.index_name,
                     shape,
                     tiler,
@@ -386,19 +401,24 @@ class PencilCompiler(Compiler):
                     self.device,
                 ).visit(i_space)
 
-                sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
+                kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
 
                 # Uncomment the following line to put some printf showing index values at runtime
-                # sub.body.append(self.insert_indexing_debugging_printfs(shape))
+                # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape))
                 # Or uncomment this to be able to print data from one of the buffer names, by specifying name index
-                # sub.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
+                # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
                          arg if not isinstance(arg, NDBuffer) else arg.ary.ravel()  # hack
                      ), _global=True) for arg_name, arg in subconfig.items()
-                   ]
-                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i), params=kernel_params, defn=[sub])
+                    ]
+                kernel_func = FunctionDecl(
+                    name=SymbolRef("kernel_{}".format(kernel_number)),
+                    params=kernel_params,
+                    defn=[kernel_body]
+                )
+
                 kernel_func.set_kernel()
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))

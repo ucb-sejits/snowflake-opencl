@@ -27,6 +27,7 @@ if __name__ == '__main__':
 
     device = cl.clGetDeviceIDs()[-1]
     ctx = cl.clCreateContext(devices=[device])
+
     queue = cl.clCreateCommandQueue(ctx)
 
     in_buf = NDBuffer(queue, buffer_in)
