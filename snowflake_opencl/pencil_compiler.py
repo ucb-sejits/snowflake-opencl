@@ -22,12 +22,13 @@ import math
 
 from snowflake_opencl.nd_buffer import NDBuffer
 
-__author__ = 'chick markley, seunghwan choi'
+__author__ = 'Chick Markley, Seunghwan Choi'
 
 # TODO: move tiler computation inside of space expander
 # TODO: fill planes
 
 
+# noinspection PyPep8Naming
 class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
     def __init__(self, mesh_name):
         self.mesh_name = mesh_name
@@ -62,7 +63,6 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
                                         )
                                     )
                                     return new_node
-
 
         return BinaryOp(
             left=self.visit(node.left),
@@ -101,6 +101,7 @@ class PencilCompiler(Compiler):
             self.global_work_size = None
             self.global_work_size_1d = None
             self.local_work_modulus = None
+            self.global_work_modulus = None
 
             super(PencilCompiler.PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
 
@@ -159,7 +160,6 @@ class PencilCompiler(Compiler):
 
             return StringTemplate(string)
 
-
         def visit_IterationSpace(self, node):
             node = self.generic_visit(node)
 
@@ -181,7 +181,7 @@ class PencilCompiler(Compiler):
                 total_lows.append(lows)
 
             self.global_work_size = total_work_dims[0][1:]
-            self.global_work_size_1d = reduce(operator.mul, self.ghost_size)
+            self.global_work_size_1d = reduce(operator.mul, self.global_work_size)
             self.local_work_modulus = [x / num_spaces for x in self.local_work_size]
             self.global_work_modulus = [x / num_spaces for x in self.global_work_size]
 
@@ -190,12 +190,24 @@ class PencilCompiler(Compiler):
             # get_global_id(0)
             parts = [
                 memory_declarations,
-                Assign(SymbolRef("tile_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
-                Assign(SymbolRef("tile_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_group_id"), [Constant(1)])),
-                Assign(SymbolRef("packed_global_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
-                Assign(SymbolRef("packed_global_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(1)])),
-                Assign(SymbolRef("packed_local_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
-                Assign(SymbolRef("packed_local_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(1)])),
+                Assign(
+                    SymbolRef("tile_id_1", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                Assign(
+                    SymbolRef("tile_id_2", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_group_id"), [Constant(1)])),
+                Assign(
+                    SymbolRef("packed_global_id_1", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
+                Assign(
+                    SymbolRef("packed_global_id_2", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_global_id"), [Constant(1)])),
+                Assign(
+                    SymbolRef("packed_local_id_1", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
+                Assign(
+                    SymbolRef("packed_local_id_2", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_local_id"), [Constant(1)])),
                 Assign(
                     SymbolRef("thread_id", ctypes.c_ulong()),
                     Add(
@@ -203,7 +215,9 @@ class PencilCompiler(Compiler):
                         SymbolRef("packed_local_id_2")
                     )
                 ),
-                Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                Assign(
+                    SymbolRef("group_id", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
             ]
 
             # initialize index variables
@@ -289,7 +303,7 @@ class PencilCompiler(Compiler):
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ]
             for_body.extend(new_body)
-            # for_body.extend(node.body)
+
             for_body.extend([
                 Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
                 Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
@@ -309,28 +323,6 @@ class PencilCompiler(Compiler):
 
             return MultiNode(parts)
 
-        def changingIndexofOut(self, binaryOp):
-            offsetleft, offsetright = self.local_to_global_index()
-            offsetleft._force_parentheses = True
-            offsetright._force_parentheses = True
-            binaryOp.right.args = [Add(offsetleft, SymbolRef(name="local_index_0")), Add(offsetright, SymbolRef(name="local_index_1"))]
-
-        def changingMeshtoLocal(self, object, encodeFunc=None):
-            if isinstance(object, BinaryOp):
-                self.changingMeshtoLocal(object.left, encodeFunc)
-                self.changingMeshtoLocal(object.right, encodeFunc)
-            if isinstance(object, SymbolRef):
-                if object.name == 'mesh':
-                    object.name = 'localmem'
-                if object.name == 'index_0' or object.name == 'index_1':
-                    object.name = 'local_' + object.name
-
-            if isinstance(object, FunctionCall):
-                object.func = encodeFunc
-                for x in object.args:
-                    if isinstance(x, BinaryOp):
-                        self.changingMeshtoLocal(x, encodeFunc)
-
         def fill_plane(self, plane_name, index_0_expression):
             final = []
             local_size = self.local_work_size_1d
@@ -342,20 +334,19 @@ class PencilCompiler(Compiler):
                 local_location._force_parentheses = True
                 left = ArrayRef(SymbolRef(name=plane_name), local_location)
 
-                # arguments = self.local_to_global_index()
-                sidearg0 = Div(local_location, Constant(self.plane_size[0]))
-                sidearg0._force_parentheses = True
-                sidearg1 = Mod(local_location, Constant(self.plane_size[1]))
-                sidearg1._force_parentheses = True
+                index_1 = Div(local_location, Constant(self.plane_size[0]))
+                index_1._force_parentheses = True
+                index_2 = Mod(local_location, Constant(self.plane_size[1]))
+                index_2._force_parentheses = True
 
                 encode_arg0 = Add(
                     Add(
                         Mul(SymbolRef("tile_id_1"), Constant(self.local_work_size[0])),
-                        Constant(self.ghost_size[1])), sidearg0)
+                        Constant(self.ghost_size[1])), index_1)
                 encode_arg1 = Add(
                     Add(
                         Mul(SymbolRef("tile_id_2"), Constant(self.local_work_size[1])),
-                        Constant(self.ghost_size[2])), sidearg1)
+                        Constant(self.ghost_size[2])), index_2)
                 encode = FunctionCall(
                     func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
                     args=[index_0_expression, encode_arg0, encode_arg1]
@@ -374,18 +365,6 @@ class PencilCompiler(Compiler):
                     final.append(Assign(left, right))
                 index += local_size
             return final
-
-        def local_to_global_index(self):
-            gid_x = self.packed_shape[0] / self.local_work_size[0]
-            gid_y = self.packed_shape[1] / self.local_work_size[1]
-            group0 = Div(SymbolRef('group_id'), Constant(gid_x))
-            group0._force_parentheses = True
-            group1 = Mod(SymbolRef('group_id'), Constant(gid_y))
-            group1._force_parentheses = True
-            offset0 = Mul(group0, Constant(self.local_work_size[0]))
-            offset1 = Mul(group1, Constant(self.local_work_size[1]))
-            return offset0, offset1
-
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
         def __init__(self, context, global_work_size, local_work_size, kernels):
@@ -431,6 +410,7 @@ class PencilCompiler(Compiler):
             self.local = local
             self.loop = loop
 
+        # noinspection PyUnusedLocal
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
             format_string = 'wgid %03d gid %04d'
             argument_string = 'get_group_id(0), global_id,'
@@ -454,6 +434,7 @@ class PencilCompiler(Compiler):
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
+        # noinspection PyProtectedMember
         def transform(self, tree, program_config):
             """
             The tree is a snowflake stencil group which makes it one or more
@@ -471,7 +452,6 @@ class PencilCompiler(Compiler):
 
             encode_funcs = []
             for shape in shapes:
-                # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
                 # the second one here is for indexing the local memory planes
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape[1:]), shape[1:]))
@@ -500,7 +480,7 @@ class PencilCompiler(Compiler):
 
                 local_reference_shape = kernel_builder.plane_size
                 new_encode_func = generate_encode_macro(
-                    'encode' + CCompiler._shape_to_str(local_reference_shape),local_reference_shape
+                    'encode' + CCompiler._shape_to_str(local_reference_shape), local_reference_shape
                 )
                 if new_encode_func not in encode_funcs:
                     encode_funcs.append(new_encode_func)  # local
@@ -534,13 +514,6 @@ class PencilCompiler(Compiler):
 
                 gws = kernel_builder.global_work_size_1d
 
-                # declare new global and local work size arrays if necessary
-                # if gws % local_work_size_1d > 0:
-                #     expanded_packed = [
-                #         (int(kernel_builder.packed_iteration_shape[dim] / kernel_builder.local_work_size[dim]) + 1) * kernel_builder.local_work_size[dim]
-                #         for dim in range(len(kernel_builder.local_work_size))
-                #     ]
-                #     gws = reduce(operator.mul, expanded_packed)
                 if gws not in gws_arrays:
                     control.append(
                         ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
@@ -573,7 +546,7 @@ class PencilCompiler(Compiler):
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
 
-            #control.append(StringTemplate("""clFinish(queue);"""))
+            # control.append(StringTemplate("""clFinish(queue);"""))
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
