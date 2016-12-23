@@ -24,9 +24,6 @@ from snowflake_opencl.nd_buffer import NDBuffer
 
 __author__ = 'Chick Markley, Seunghwan Choi'
 
-# TODO: move tiler computation inside of space expander
-# TODO: fill planes
-
 
 # noinspection PyPep8Naming
 class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
@@ -319,8 +316,6 @@ class PencilCompiler(Compiler):
 
             parts.append(pencil_block)
 
-            # parts.extend(node.body)
-
             return MultiNode(parts)
 
         def fill_plane(self, plane_name, index_0_expression):
@@ -456,7 +451,9 @@ class PencilCompiler(Compiler):
                 # the second one here is for indexing the local memory planes
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape[1:]), shape[1:]))
 
-            includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
+            includes = []
+            if "cl_khr_fp64" in self.device.extensions:
+                includes.append(StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable"))
 
             ocl_files, kernels = [], []
             control = [Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0))]
@@ -485,13 +482,6 @@ class PencilCompiler(Compiler):
                 if new_encode_func not in encode_funcs:
                     encode_funcs.append(new_encode_func)  # local
 
-                local_work_size_1d = kernel_builder.local_work_size_1d
-                print(
-                    "local_work_size {} local_work_size_1d {}".format(
-                        kernel_builder.local_work_size, local_work_size_1d
-                    )
-                )
-
                 # Uncomment the following line to put some printf showing index values at runtime
                 # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape))
                 # Or uncomment this to be able to print data from one of the buffer names, by specifying name index
@@ -512,22 +502,24 @@ class PencilCompiler(Compiler):
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
-                gws = kernel_builder.global_work_size_1d
+                gws = kernel_builder.global_work_size
+                lws = kernel_builder.local_work_size
 
                 if gws not in gws_arrays:
                     control.append(
-                        ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
-                    gws_arrays[gws] = SymbolRef("global_%d" % gws)
+                        ArrayDef(
+                            SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
+                            2,
+                            Array(body=[Constant(x) for x in gws])))
+                    gws_arrays[gws] = SymbolRef("global_{}_{} ".format(gws[0], gws[1]))
 
-                if local_work_size_1d not in lws_arrays:
+                if lws not in lws_arrays:
                     control.append(
                         ArrayDef(
-                            SymbolRef("local_%d " % local_work_size_1d, ctypes.c_ulong()),
-                            1,
-                            Array(body=[Constant(local_work_size_1d)])
-                        )
-                    )
-                    lws_arrays[local_work_size_1d] = SymbolRef("local_%d" % local_work_size_1d)
+                            SymbolRef("local__{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
+                            2,
+                            Array(body=[Constant(x) for x in lws])))
+                    lws_arrays[lws] = SymbolRef("local__{}_{} ".format(gws[0], gws[1]))
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
@@ -540,8 +532,8 @@ class PencilCompiler(Compiler):
 
                 # clEnqueueNDRangeKernel
                 enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
-                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
-                                   gws_arrays[gws], lws_arrays[local_work_size_1d], Constant(0), NULL(), NULL()
+                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(2), NULL(),
+                                   gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
                                ])
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
