@@ -4,7 +4,7 @@ import pycl as cl
 import ast
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div
+    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -39,6 +39,7 @@ class PencilCompiler(Compiler):
 
     class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         def __init__(self, index_name, reference_array_shape, stencil, device):
+            self.stencil = stencil
             self.stencil_node = stencil.op_tree
             self.ghost_size = tuple((x - 1)/2 for x in self.stencil_node.weights.shape)
             self.device = device
@@ -55,6 +56,7 @@ class PencilCompiler(Compiler):
 
             self.global_work_size = None
             self.global_work_size_1d = None
+            self.local_work_modulus = None
 
             super(PencilCompiler.PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
 
@@ -119,6 +121,8 @@ class PencilCompiler(Compiler):
 
             total_work_dims, total_strides, total_lows = [], [], []
 
+            spaces = node.space.spaces
+            num_spaces = len(spaces)
             for space in node.space.spaces:
                 lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
                 highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
@@ -132,18 +136,29 @@ class PencilCompiler(Compiler):
                 total_strides.append(strides)
                 total_lows.append(lows)
 
-            self.global_work_size = total_work_dims[1:]
+            self.global_work_size = total_work_dims[0][1:]
             self.global_work_size_1d = reduce(operator.mul, self.ghost_size)
+            self.local_work_modulus = [x / num_spaces for x in self.local_work_size]
+            self.global_work_modulus = [x / num_spaces for x in self.global_work_size]
 
             memory_declarations = self.get_local_memory_declarations()
 
             # get_global_id(0)
             parts = [
                 memory_declarations,
-                Assign(SymbolRef("packed_global_id_0", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
-                Assign(SymbolRef("packed_global_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(1)])),
-                Assign(SymbolRef("packed_local_id_0", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
-                Assign(SymbolRef("packed_local_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(1)])),
+                Assign(SymbolRef("tile_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                Assign(SymbolRef("tile_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_group_id"), [Constant(1)])),
+                Assign(SymbolRef("packed_global_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(0)])),
+                Assign(SymbolRef("packed_global_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_global_id"), [Constant(1)])),
+                Assign(SymbolRef("packed_local_id_1", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(0)])),
+                Assign(SymbolRef("packed_local_id_2", ctypes.c_ulong()), FunctionCall(SymbolRef("get_local_id"), [Constant(1)])),
+                Assign(
+                    SymbolRef("thread_id", ctypes.c_ulong()),
+                    Add(
+                        Mul(SymbolRef("packed_local_id_1"), Constant(self.local_work_size[0])),
+                        SymbolRef("packed_local_id_2")
+                    )
+                ),
                 Assign(SymbolRef("group_id", ctypes.c_ulong()),FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
             ]
 
@@ -157,28 +172,65 @@ class PencilCompiler(Compiler):
                 for dim in range(len(self.reference_array_shape)))
 
             # construct offset arrays for each iterations space
+
             arrays = []
-            for dim in range(3):
+            for dim in range(0, 3):
                 offsets = []
                 strides = []
                 for space in node.space.spaces:
                     offsets.append(space.low[dim])
                     strides.append(space.stride[dim])
+
+                local_index = "local_index_{}".format(dim)
+                packed_local_index = "packed_local_id_{}".format(dim)
+                packed_global_index = "packed_global_id_{}".format(dim)
+                dim_offsets = "dim_{}_offsets".format(dim)
+                dim_strides = "dim_{}_strides".format(dim)
                 arrays.append(
                     Assign(
-                        SymbolRef("dim_{}_offsets".format(dim), ctypes.c_ulong()),
+                        StringTemplate("size_t {}[]".format(dim_offsets)),
                         StringTemplate('{' + ", ".join([str(x) for x in offsets]) + '}')
                     )
                 )
                 arrays.append(
                     Assign(
-                        SymbolRef("dim_{}_strides".format(dim), ctypes.c_ulong()),
-                        StringTemplate('{' + ", ".join([str(x) for x in offsets]) + '}')
+                        StringTemplate("size_t {}[]".format(dim_strides)),
+                        StringTemplate('{' + ", ".join([str(x) for x in strides]) + '}')
                     )
                 )
+
+                if dim > 0:
+                    local_dim_mod = Mod(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1]))
+                    global_dim_mod = Mod(SymbolRef(packed_global_index), Constant(self.local_work_modulus[dim-1]))
+
+                    arrays.append(
+                        Assign(
+                            SymbolRef(local_index),
+                            Add(
+                                Mul(
+                                    Mod(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1])),
+                                    ArrayRef(SymbolRef(dim_strides), local_dim_mod)
+                                ),
+                                ArrayRef(SymbolRef(dim_offsets), local_dim_mod)
+                            )
+                        )
+                    )
+                    arrays.append(
+                        Assign(
+                            SymbolRef("index_{}".format(dim)),
+                            Add(
+                                Mul(
+                                    Mod(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim-1])),
+                                    ArrayRef(SymbolRef(dim_strides), global_dim_mod)
+                                ),
+                                ArrayRef(SymbolRef(dim_offsets), global_dim_mod)
+                            )
+                        )
+                    )
 
             parts.extend(arrays)
 
+            parts.extend(self.fill_plane2(Constant(0)))
 
             # calculate each index inline
             for space in range(len(node.space.spaces)):
@@ -233,64 +285,49 @@ class PencilCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
-        def fill_plane(self, plane_number):
+        def fill_plane2(self, index_0_expression):
             final = []
-            localSize = reduce(operator.mul, self.local_work_size)
-            copyingSize = reduce(operator.mul, local_reference_array_shape)
+            local_size = self.local_work_size_1d
+            copying_size = self.plane_size_1d
+
             index = 0
-            while index < copyingSize:
-                local_location = Add(SymbolRef(name="local_id"), Constant(index))
+            while index < copying_size:
+                local_location = Add(SymbolRef(name="thread_id"), Constant(index))
                 local_location._force_parentheses = True
-                left = ArrayRef(SymbolRef(name="localmem"), local_location)
-                arguments = self.local_to_global_index()
-                sidearg0 = Div(local_location, Constant(local_reference_array_shape[0]))
+                left = ArrayRef(SymbolRef(name="plane_2"), local_location)
+
+                # arguments = self.local_to_global_index()
+                sidearg0 = Div(local_location, Constant(self.plane_size[0]))
                 sidearg0._force_parentheses = True
-                sidearg1 = Mod(local_location, Constant(local_reference_array_shape[1]))
+                sidearg1 = Mod(local_location, Constant(self.plane_size[1]))
                 sidearg1._force_parentheses = True
-                encode_arg0 = Add(arguments[0],sidearg0 )
-                encode_arg1 = Add(arguments[1], sidearg1)
-                encode = FunctionCall(func=SymbolRef("encode" + str(self.reference_array_shape[0]) + "_" + str(self.reference_array_shape[0])), args=[encode_arg0, encode_arg1])
-                right = ArrayRef(SymbolRef(name="mesh"), encode)
-                if index + localSize > copyingSize:
-                    ifstatement = 'if (local_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
-                    ifstatement = StringTemplate(ifstatement)
-                    final.append(ifstatement)
-                    final.append((Assign(left, right)))
-                    final.append(StringTemplate('}'))
+
+                encode_arg0 = Add(
+                    Add(
+                        Mul(SymbolRef("tile_id_1"), Constant(self.local_work_size[0])),
+                        Constant(self.ghost_size[1])), sidearg0)
+                encode_arg1 = Add(
+                    Add(
+                        Mul(SymbolRef("tile_id_2"), Constant(self.local_work_size[1])),
+                        Constant(self.ghost_size[2])), sidearg1)
+                encode = FunctionCall(
+                    func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
+                    args=[index_0_expression, encode_arg0, encode_arg1]
+                )
+
+                right = ArrayRef(SymbolRef(name=self.stencil.primary_mesh), encode)
+
+                if index + local_size > copying_size:
+                    final.append(
+                        If(
+                            cond=Lt(Add(SymbolRef("thread_id"), Constant(index)), Constant(copying_size)),
+                            then=Assign(left, right)
+                        )
+                    )
                 else:
                     final.append(Assign(left, right))
-                index += localSize
+                index += local_size
             return final
-
-        def local_to_global_copy(self, local_reference_array_shape):
-            final = []
-            localSize = reduce(operator.mul, self.local_work_size)
-            copyingSize = reduce(operator.mul, local_reference_array_shape)
-            index = 0
-            while index < copyingSize:
-                local_location = Add(SymbolRef(name="local_id"), Constant(index))
-                local_location._force_parentheses = True
-                left = ArrayRef(SymbolRef(name="localmem"), local_location)
-                arguments = self.local_to_global_index()
-                sidearg0 = Div(local_location, Constant(local_reference_array_shape[0]))
-                sidearg0._force_parentheses = True
-                sidearg1 = Mod(local_location, Constant(local_reference_array_shape[1]))
-                sidearg1._force_parentheses = True
-                encode_arg0 = Add(arguments[0],sidearg0 )
-                encode_arg1 = Add(arguments[1], sidearg1)
-                encode = FunctionCall(func=SymbolRef("encode" + str(self.reference_array_shape[0]) + "_" + str(self.reference_array_shape[0])), args=[encode_arg0, encode_arg1])
-                right = ArrayRef(SymbolRef(name="mesh"), encode)
-                if index + localSize > copyingSize:
-                    ifstatement = 'if (local_id + ' + str(index) + ' < ' + str(copyingSize) + ') {'
-                    ifstatement = StringTemplate(ifstatement)
-                    final.append(ifstatement)
-                    final.append((Assign(left, right)))
-                    final.append(StringTemplate('}'))
-                else:
-                    final.append(Assign(left, right))
-                index += localSize
-            return final
-
 
         def local_to_global_index(self):
             gid_x = self.packed_shape[0] / self.local_work_size[0]
@@ -301,7 +338,7 @@ class PencilCompiler(Compiler):
             group1._force_parentheses = True
             offset0 = Mul(group0, Constant(self.local_work_size[0]))
             offset1 = Mul(group1, Constant(self.local_work_size[1]))
-            return (offset0, offset1)
+            return offset0, offset1
 
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
