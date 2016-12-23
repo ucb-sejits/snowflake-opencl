@@ -21,7 +21,6 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 import math
 
 from snowflake_opencl.nd_buffer import NDBuffer
-from snowflake_opencl.ocl_tiler import OclTiler
 
 __author__ = 'chick markley, seunghwan choi'
 
@@ -474,6 +473,8 @@ class PencilCompiler(Compiler):
             for shape in shapes:
                 # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
+                # the second one here is for indexing the local memory planes
+                encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape[1:]), shape[1:]))
 
             includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
 
