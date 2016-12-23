@@ -4,7 +4,7 @@ import pycl as cl
 import ast
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If
+    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -230,36 +230,35 @@ class PencilCompiler(Compiler):
 
             parts.extend(arrays)
 
-            parts.extend(self.fill_plane2(Constant(0)))
+            parts.append(StringTemplate("    //"))
+            parts.append(StringTemplate("    // Fill local memory planes"))
+            parts.append(StringTemplate("    //"))
+            parts.extend(self.fill_plane2("plane_0", Constant(0)))
+            parts.extend(self.fill_plane2("plane_1", Constant(1)))
 
-            # calculate each index inline
-            for space in range(len(node.space.spaces)):
-                # indices = self.build_index_variables(SymbolRef("global_id"),
-                #                                    shape=Vector(highs) - Vector(lows),
-                #                                    multipliers=total_strides[space],
-                #                                    offsets=total_lows[space])
-                # indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
-                #                                                        iteration_space_index=space)
-                # local_indices = tiler.get_local_coordinates_expression(SymbolRef("local_id"))
-                #
-                # for dim in range(len(self.reference_array_shape)):
-                #     parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim + 1)), indices[dim]))
-                # for dim in range(len(self.reference_array_shape)):
-                #     parts.append(Assign(SymbolRef("{}_{}".format("local_" + self.index_name, dim)), local_indices[dim]))
-                #
-                # for dim in range(tile.dim)
-                # new_body = [
-                #     tiler.add_guards_if_necessary(statement)
-                #     for statement in node.body
-                #     ]
-                # node.body = new_body
-                # parts.extend(self.local_to_global_copy(tiler.calculate_local_reference_array_shape()))
-                # local_reference_array_shape = tiler.calculate_local_reference_array_shape()
-                # parts.append((StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);''')))
-                # encodeFunc = SymbolRef("encode" + str(local_reference_array_shape[0]) + "_" + str(local_reference_array_shape[0]))
-                # self.changingMeshtoLocal(node.body[0].body[0].right, encodeFunc)
-                # self.changingIndexofOut(node.body[0].body[0].left)
-                parts.extend(node.body)
+            #
+            # Do the pencil iteration
+            for_body = [
+                    self.fill_plane2("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
+                    StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
+            ]
+            for_body.extend(node.body)
+            for_body.extend([
+                Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
+                Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
+                Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
+                Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
+            ])
+            pencil_block = For(
+                init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
+                test=Lt(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+                incr=PostInc(SymbolRef("index_0")),
+                body=for_body
+            )
+
+            parts.append(pencil_block)
+
+            # parts.extend(node.body)
 
             return MultiNode(parts)
 
@@ -285,7 +284,7 @@ class PencilCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
-        def fill_plane2(self, index_0_expression):
+        def fill_plane2(self, plane_name, index_0_expression):
             final = []
             local_size = self.local_work_size_1d
             copying_size = self.plane_size_1d
@@ -294,7 +293,7 @@ class PencilCompiler(Compiler):
             while index < copying_size:
                 local_location = Add(SymbolRef(name="thread_id"), Constant(index))
                 local_location._force_parentheses = True
-                left = ArrayRef(SymbolRef(name="plane_2"), local_location)
+                left = ArrayRef(SymbolRef(name=plane_name), local_location)
 
                 # arguments = self.local_to_global_index()
                 sidearg0 = Div(local_location, Constant(self.plane_size[0]))
