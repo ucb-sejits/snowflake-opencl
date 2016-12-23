@@ -1,10 +1,12 @@
 import ctypes
 import operator
+import re
+
 import pycl as cl
 import ast
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc
+    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, Op
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -25,6 +27,49 @@ __author__ = 'chick markley, seunghwan choi'
 
 # TODO: move tiler computation inside of space expander
 # TODO: fill planes
+
+
+class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
+    def __init__(self, mesh_name):
+        self.mesh_name = mesh_name
+        super(PrimaryMeshToPlaneTransformer, self).__init__()
+
+    # def visit(self, node):
+    #     print("override visit node: {}".format(node.__class__))
+    #     return super(PrimaryMeshToPlaneTransformer, self).visit(node)
+
+    def visit_BinaryOp(self, node):
+        if isinstance(node.op, Op.ArrayRef):
+            print("in binary op: op is {}".format(node.op.__class__))
+            if isinstance(node.left, SymbolRef):
+                if node.left.name is self.mesh_name:
+                    print("found mesh name {}, right is {}".format(self.mesh_name, type(node.right)))
+                    if isinstance(node.right, FunctionCall) and isinstance(node.right.func, SymbolRef):
+                        print("Function call is {}".format(node.right.func))
+                        m = re.match('encode(\d+)_(\d+)_(\d+)', node.right.func.name)
+                        if m:
+                            print("got encode {} {} {}".format(m.group(1), m.group(2), m.group(3)))
+                            func = node.right
+                            if isinstance(func.args[0], BinaryOp) and isinstance(func.args[0].op, Op.Add):
+                                add = func.args[0]
+                                if isinstance(add.right, Constant):
+                                    print("index_0 offset is {}".format(add.right.value))
+
+                                    new_node = ArrayRef(
+                                        SymbolRef("plane_{}".format(1+add.right.value)),
+                                        FunctionCall(
+                                            func=SymbolRef("encode{}_{}".format(m.group(2), m.group(3))),
+                                            args=func.args[1:]
+                                        )
+                                    )
+                                    return new_node
+
+
+        return BinaryOp(
+            left=self.visit(node.left),
+            op=node.op,
+            right=self.visit(node.right)
+        )
 
 
 class PencilCompiler(Compiler):
@@ -231,18 +276,21 @@ class PencilCompiler(Compiler):
             parts.extend(arrays)
 
             parts.append(StringTemplate("    //"))
-            parts.append(StringTemplate("    // Fill local memory planes"))
+            parts.append(StringTemplate("    // Fill the first local memory planes"))
             parts.append(StringTemplate("    //"))
-            parts.extend(self.fill_plane2("plane_0", Constant(0)))
-            parts.extend(self.fill_plane2("plane_1", Constant(1)))
+            parts.extend(self.fill_plane("plane_0", Constant(0)))
+            parts.extend(self.fill_plane("plane_1", Constant(1)))
 
             #
             # Do the pencil iteration
+            body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name)
+            new_body = [body_transformer.visit(sub_node) for sub_node in node.body]
             for_body = [
-                    self.fill_plane2("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
-                    StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
+                self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
+                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ]
-            for_body.extend(node.body)
+            for_body.extend(new_body)
+            # for_body.extend(node.body)
             for_body.extend([
                 Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
                 Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
@@ -284,7 +332,7 @@ class PencilCompiler(Compiler):
                     if isinstance(x, BinaryOp):
                         self.changingMeshtoLocal(x, encodeFunc)
 
-        def fill_plane2(self, plane_name, index_0_expression):
+        def fill_plane(self, plane_name, index_0_expression):
             final = []
             local_size = self.local_work_size_1d
             copying_size = self.plane_size_1d
