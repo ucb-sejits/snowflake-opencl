@@ -93,7 +93,6 @@ class PencilCompiler(Compiler):
             self.plane_size_1d = None
             self.local_work_size = None
             self.local_work_size_1d = None
-            self.compute_plane_info()
 
             self.global_work_size = None
             self.global_work_size_1d = None
@@ -129,7 +128,11 @@ class PencilCompiler(Compiler):
             max_real_nums_per_plane = max_reals_in_localmem / self.planes
             max_size_per_dim = math.sqrt(max_real_nums_per_plane)
 
+            max_local_work_size_per_dim = int(math.sqrt(self.device.max_work_group_size))
+
             log_of_edge = int(math.log(max_size_per_dim - (self.ghost_size[0] * 2), 2))
+            log_of_edge = min(log_of_edge, int(math.log(max_local_work_size_per_dim, 2)))
+            log_of_edge = min(log_of_edge, int(math.log(self.global_work_size[1], 2)))
             tile_edge = int(math.pow(2, log_of_edge)) + (self.ghost_size[0] * 2)
 
             self.plane_size = (tile_edge, tile_edge)
@@ -179,6 +182,9 @@ class PencilCompiler(Compiler):
 
             self.global_work_size = total_work_dims[0][1:]
             self.global_work_size_1d = reduce(operator.mul, self.global_work_size)
+
+            self.compute_plane_info()
+
             self.local_work_modulus = [x / num_spaces for x in self.local_work_size]
             self.global_work_modulus = [x / num_spaces for x in self.global_work_size]
 
@@ -291,16 +297,49 @@ class PencilCompiler(Compiler):
             parts.extend(self.fill_plane("plane_0", Constant(0)))
             parts.extend(self.fill_plane("plane_1", Constant(1)))
 
+            # parts.extend(
+            #     [
+            #         StringTemplate(
+            #             'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
+            #                ",".join(["%6d " for x in range(6)]),
+            #                ",".join(["{}".format(y * 6 + x) for x in range(6)])
+            #             )
+            #         )
+            #         for y in range(6)
+            #     ]
+            # )
+
+            parts.extend(
+                [
+                    StringTemplate(
+                        'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
+                           ",".join(["%6.4f " for x in range(6)]),
+                           ",".join(["plane_1[{}]".format((y * 6) + x) for x in range(6)])
+                        )
+                    )
+                    for y in range(6)
+                ]
+            )
+
+            for_body = []
+            for_body.append(
+                StringTemplate(
+                   'printf("{}\\n", {});'.format(
+                       "inds %4d %4d %4d",
+                       "index_0, index_1, index_2"
+                   )
+                )
+            )
             #
             # Do the pencil iteration
             body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name)
             new_body = [body_transformer.visit(sub_node) for sub_node in node.body]
-            for_body = [
+            for_body.extend([
                 self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
-            ]
+            ])
             for_body.extend(new_body)
-
+            # for_body.extend(node.body)
             for_body.extend([
                 Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
                 Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
@@ -334,30 +373,46 @@ class PencilCompiler(Compiler):
                 index_2 = Mod(local_location, Constant(self.plane_size[1]))
                 index_2._force_parentheses = True
 
+                # (thread_id + offset) % tile_id
                 encode_arg0 = Add(
-                    Add(
-                        Mul(SymbolRef("tile_id_1"), Constant(self.local_work_size[0])),
-                        Constant(self.ghost_size[1])), index_1)
+                        Mul(SymbolRef("tile_id_1"), Constant(self.local_work_size[0])), index_1)
+                encode_arg0._force_parentheses = True
+
                 encode_arg1 = Add(
-                    Add(
-                        Mul(SymbolRef("tile_id_2"), Constant(self.local_work_size[1])),
-                        Constant(self.ghost_size[2])), index_2)
+                        Mul(SymbolRef("tile_id_2"), Constant(self.local_work_size[1])), index_2)
+                encode_arg1._force_parentheses = True
+
                 encode = FunctionCall(
                     func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
                     args=[index_0_expression, encode_arg0, encode_arg1]
                 )
 
-                right = ArrayRef(SymbolRef(name=self.stencil.primary_mesh), encode)
+                right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
+
+                def make_debug_printf():
+                    return StringTemplate(
+                        'printf("plane fill {}\\n", {});'.format(
+                           "%6d, %6d, %6d, " + plane_name + "[ %6d ] = %6.4f",
+                           index_0_expression.codegen() + ", " + encode_arg0.codegen() + ", " + encode_arg1.codegen() +
+                           ", " + local_location.codegen() + ",  " + right.codegen()
+                        )
+                    )
 
                 if index + local_size > copying_size:
                     final.append(
                         If(
                             cond=Lt(Add(SymbolRef("thread_id"), Constant(index)), Constant(copying_size)),
-                            then=Assign(left, right)
+                            then=[
+                                Assign(left, right),
+                                make_debug_printf()
+                            ]
                         )
                     )
                 else:
                     final.append(Assign(left, right))
+                    final.append(make_debug_printf())
+
+
                 index += local_size
             return final
 
@@ -407,8 +462,8 @@ class PencilCompiler(Compiler):
 
         # noinspection PyUnusedLocal
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
-            format_string = 'wgid %03d gid %04d'
-            argument_string = 'get_group_id(0), global_id,'
+            format_string = 'wgid %03d gid1 %04d gid2 %04d'
+            argument_string = 'get_group_id(0), packed_global_id_1, packed_global_id_2,'
             # noinspection PyProtectedMember
             encode_string = 'encode'+CCompiler._shape_to_str(shape)
 
@@ -516,10 +571,10 @@ class PencilCompiler(Compiler):
                 if lws not in lws_arrays:
                     control.append(
                         ArrayDef(
-                            SymbolRef("local__{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
+                            SymbolRef("local_{}_{} ".format(lws[0], lws[1]), ctypes.c_ulong()),
                             2,
                             Array(body=[Constant(x) for x in lws])))
-                    lws_arrays[lws] = SymbolRef("local__{}_{} ".format(gws[0], gws[1]))
+                    lws_arrays[lws] = SymbolRef("local_{}_{} ".format(lws[0], lws[1]))
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
