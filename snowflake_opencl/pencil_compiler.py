@@ -6,7 +6,8 @@ import pycl as cl
 import ast
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, Op
+    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, Op, \
+    LtE
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -228,10 +229,6 @@ class PencilCompiler(Compiler):
                 SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
                 for dim in range(len(self.reference_array_shape)))
 
-            parts.extend(
-                SymbolRef("{}_{}".format("local_" + self.index_name, dim), ctypes.c_ulong())
-                for dim in range(len(self.reference_array_shape)))
-
             # construct offset arrays for each iterations space
 
             arrays = []
@@ -261,27 +258,16 @@ class PencilCompiler(Compiler):
                 )
 
                 if dim > 0:
-                    local_dim_mod = Mod(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1]))
-                    global_dim_mod = Mod(SymbolRef(packed_global_index), Constant(self.local_work_modulus[dim-1]))
+                    global_dim_mod = Div(SymbolRef(packed_global_index), Constant(self.local_work_modulus[dim-1]))
 
-                    arrays.append(
-                        Assign(
-                            SymbolRef(local_index),
-                            Add(
-                                Mul(
-                                    Mod(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1])),
-                                    ArrayRef(SymbolRef(dim_strides), local_dim_mod)
-                                ),
-                                ArrayRef(SymbolRef(dim_offsets), local_dim_mod)
-                            )
-                        )
-                    )
+                    modulo_index = Mod(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim-1]))
+                    modulo_index._force_parentheses = True
                     arrays.append(
                         Assign(
                             SymbolRef("index_{}".format(dim)),
                             Add(
                                 Mul(
-                                    Mod(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim-1])),
+                                    modulo_index,
                                     ArrayRef(SymbolRef(dim_strides), global_dim_mod)
                                 ),
                                 ArrayRef(SymbolRef(dim_offsets), global_dim_mod)
@@ -289,44 +275,34 @@ class PencilCompiler(Compiler):
                         )
                     )
 
+            def debug_show_plane(n):
+                return [
+                    StringTemplate(
+                        'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
+                           ",".join(["%6.4f " for x in range(6)]),
+                           ",".join(["plane_" + str(n) + "[{}]".format((y * 6) + x) for x in range(6)])
+                        )
+                    )
+                    for y in range(6)
+                ]
+
             parts.extend(arrays)
 
             parts.append(StringTemplate("    //"))
             parts.append(StringTemplate("    // Fill the first local memory planes"))
             parts.append(StringTemplate("    //"))
             parts.extend(self.fill_plane("plane_0", Constant(0)))
+            parts.extend(debug_show_plane(0))
             parts.extend(self.fill_plane("plane_1", Constant(1)))
 
-            # parts.extend(
-            #     [
-            #         StringTemplate(
-            #             'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
-            #                ",".join(["%6d " for x in range(6)]),
-            #                ",".join(["{}".format(y * 6 + x) for x in range(6)])
-            #             )
-            #         )
-            #         for y in range(6)
-            #     ]
-            # )
-
-            parts.extend(
-                [
-                    StringTemplate(
-                        'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
-                           ",".join(["%6.4f " for x in range(6)]),
-                           ",".join(["plane_1[{}]".format((y * 6) + x) for x in range(6)])
-                        )
-                    )
-                    for y in range(6)
-                ]
-            )
+            parts.extend(debug_show_plane(1))
 
             for_body = []
             for_body.append(
                 StringTemplate(
                    'printf("{}\\n", {});'.format(
-                       "inds %4d %4d %4d",
-                       "index_0, index_1, index_2"
+                       "thread %d packed_global_id_" + str(dim) + " %4d index (%4d, %4d, %4d)",
+                       "thread_id, packed_global_id_" + str(dim) + ", index_0, index_1, index_2"
                    )
                 )
             )
@@ -346,9 +322,10 @@ class PencilCompiler(Compiler):
                 Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
                 Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
             ])
+
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
-                test=Lt(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+                test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
                 incr=PostInc(SymbolRef("index_0")),
                 body=for_body
             )
@@ -390,6 +367,7 @@ class PencilCompiler(Compiler):
                 right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
 
                 def make_debug_printf():
+                    return ""
                     return StringTemplate(
                         'printf("plane fill {}\\n", {});'.format(
                            "%6d, %6d, %6d, " + plane_name + "[ %6d ] = %6.4f",
