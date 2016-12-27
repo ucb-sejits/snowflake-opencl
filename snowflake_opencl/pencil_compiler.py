@@ -135,6 +135,7 @@ class PencilCompiler(Compiler):
             log_of_edge = min(log_of_edge, int(math.log(max_local_work_size_per_dim, 2)))
             log_of_edge = min(log_of_edge, int(math.log(self.global_work_size[1], 2)))
             tile_edge = int(math.pow(2, log_of_edge)) + (self.ghost_size[0] * 2)
+            tile_edge = 4  #TODO: remove this
 
             self.plane_size = (tile_edge, tile_edge)
             self.plane_size_1d = reduce(operator.mul, self.plane_size)
@@ -220,8 +221,11 @@ class PencilCompiler(Compiler):
                     )
                 ),
                 Assign(
-                    SymbolRef("group_id", ctypes.c_ulong()),
+                    SymbolRef("group_id_0", ctypes.c_ulong()),
                     FunctionCall(SymbolRef("get_group_id"), [Constant(0)])),
+                Assign(
+                    SymbolRef("group_id_1", ctypes.c_ulong()),
+                    FunctionCall(SymbolRef("get_group_id"), [Constant(1)])),
             ]
 
             # initialize index variables
@@ -258,7 +262,7 @@ class PencilCompiler(Compiler):
                 )
 
                 if dim > 0:
-                    global_dim_mod = Div(SymbolRef(packed_global_index), Constant(self.local_work_modulus[dim-1]))
+                    global_dim_mod = Div(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1]))
 
                     modulo_index = Mod(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim-1]))
                     modulo_index._force_parentheses = True
@@ -276,14 +280,17 @@ class PencilCompiler(Compiler):
                     )
 
             def debug_show_plane(n):
+                elements = self.plane_size[0]
                 return [
                     StringTemplate(
                         'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
-                           ",".join(["%6.4f " for x in range(6)]),
-                           ",".join(["plane_" + str(n) + "[{}]".format((y * 6) + x) for x in range(6)])
+                           "pfwg %4d %4d  %4d   " + ",".join(["%6.4f " for x in range(elements)]),
+                           "group_id_0, group_id_1, " + str(n) + ", " +
+                           ",".join(["plane_" + str(n) + "[{}]".format(
+                               (y * elements) + x) for x in range(elements)])
                         )
                     )
-                    for y in range(6)
+                    for y in range(elements)
                 ]
 
             parts.extend(arrays)
@@ -294,15 +301,14 @@ class PencilCompiler(Compiler):
             parts.extend(self.fill_plane("plane_0", Constant(0)))
             parts.extend(debug_show_plane(0))
             parts.extend(self.fill_plane("plane_1", Constant(1)))
-
             parts.extend(debug_show_plane(1))
 
             for_body = []
             for_body.append(
                 StringTemplate(
                    'printf("{}\\n", {});'.format(
-                       "thread %d packed_global_id_" + str(dim) + " %4d index (%4d, %4d, %4d)",
-                       "thread_id, packed_global_id_" + str(dim) + ", index_0, index_1, index_2"
+                       "group (%3d, %3d) thread %d packed_global_id_" + str(dim) + " %4d index (%4d, %4d, %4d)",
+                       "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) + ", index_0, index_1, index_2"
                    )
                 )
             )
@@ -314,6 +320,7 @@ class PencilCompiler(Compiler):
                 self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ])
+            for_body.extend(debug_show_plane(2))
             for_body.extend(new_body)
             # for_body.extend(node.body)
             for_body.extend([
@@ -367,9 +374,8 @@ class PencilCompiler(Compiler):
                 right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
 
                 def make_debug_printf():
-                    return ""
                     return StringTemplate(
-                        'printf("plane fill {}\\n", {});'.format(
+                        ' printf("plane fill {}\\n", {});'.format(
                            "%6d, %6d, %6d, " + plane_name + "[ %6d ] = %6.4f",
                            index_0_expression.codegen() + ", " + encode_arg0.codegen() + ", " + encode_arg1.codegen() +
                            ", " + local_location.codegen() + ",  " + right.codegen()

@@ -178,6 +178,10 @@ def print_mesh(mesh, message=None):
     if 2d then standard over and down
     :return:
     """
+    if mesh.shape[0] > 18:
+        mesh = mesh[-8:, -8:, -8:]
+        # mesh = mesh[:8, :8, :8]
+
     shape = mesh.shape
 
     if message:

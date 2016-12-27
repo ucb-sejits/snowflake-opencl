@@ -13,7 +13,7 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 6
+    size = 10
     import logging
     logging.basicConfig(level=20)
 
