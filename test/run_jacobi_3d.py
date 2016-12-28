@@ -1,6 +1,8 @@
 from __future__ import print_function
+
 import numpy as np
 import pycl as cl
+import time
 
 from snowflake_opencl.pencil_compiler import PencilCompiler
 from snowflake_opencl.util import print_mesh
@@ -13,7 +15,7 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 34
+    size = 512
     import logging
     logging.basicConfig(level=20)
 
@@ -61,10 +63,15 @@ if __name__ == '__main__':
 
     compiler = PencilCompiler(ctx, device)
     jacobi_operator = compiler.compile(jacobi_stencil)
-    jacobi_operator(out_buf, in_buf)
 
+    start_time = time.time()
+
+    jacobi_operator(out_buf, in_buf)
     buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
+
     out_evt.wait()
+
+    end_time = time.time()
 
     print("Input " + "=" * 80)
     print_mesh(buffer_in)
@@ -73,4 +80,4 @@ if __name__ == '__main__':
 
     # print("in buf\n" + buffer_in.ary[0,0,0:10])
     # print("out buf\n" + buffer_out[1][1][0:10])
-    print("done")
+    print("done in {} seconds".format(end_time - start_time))

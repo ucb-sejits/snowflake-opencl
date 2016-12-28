@@ -302,7 +302,7 @@ class PencilCompiler(Compiler):
                     )
 
             def debug_show_plane(n):
-                # return []
+                return []
                 elements = self.plane_size[0]
                 return [
                     StringTemplate(
@@ -347,18 +347,19 @@ class PencilCompiler(Compiler):
                 Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
                 Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
             ])
-            for_body.append(
-                StringTemplate(
-                   'printf("{}\\n", {});'.format(
-                       "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
-                       " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
-                       "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
-                       ", index_0, index_1, index_2" +
-                       ", local_index_0, local_index_1, local_index_2" +
-                       ", out[encode{}(index_0, index_1, index_2)]".format("_".join([str(n) for n in self.reference_array_shape]))
-                   )
-                )
-            )
+            # for_body.append(
+            #     StringTemplate(
+            #        'printf("{}\\n", {});'.format(
+            #            "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
+            #            " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
+            #            "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
+            #            ", index_0, index_1, index_2" +
+            #            ", local_index_0, local_index_1, local_index_2" +
+            #            ", out[encode{}(index_0, index_1, index_2)]".format("_".join([str(n) for n in self.reference_array_shape]))
+            #        )
+            #
+            #    )
+            # )
 
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
