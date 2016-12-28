@@ -13,13 +13,14 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 10
+    size = 34
     import logging
     logging.basicConfig(level=20)
 
     np.random.seed(0)
 
     buffer_in = np.random.random((size, size, size)).astype(np.float32)
+    # buffer_in = np.ones((size, size, size)).astype(np.float32)
     # for j, x in enumerate(buffer_in):
     #     for i, y in enumerate(x):
     #         for k, _ in enumerate(y):

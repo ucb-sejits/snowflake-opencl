@@ -28,8 +28,9 @@ __author__ = 'Chick Markley, Seunghwan Choi'
 
 # noinspection PyPep8Naming
 class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
-    def __init__(self, mesh_name):
+    def __init__(self, mesh_name, plane_size):
         self.mesh_name = mesh_name
+        self.plane_size = plane_size
         super(PrimaryMeshToPlaneTransformer, self).__init__()
 
     # def visit(self, node):
@@ -56,8 +57,8 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
                                     new_node = ArrayRef(
                                         SymbolRef("plane_{}".format(1+add.right.value)),
                                         FunctionCall(
-                                            func=SymbolRef("encode{}_{}".format(m.group(2), m.group(3))),
-                                            args=func.args[1:]
+                                            func=SymbolRef("encode{}_{}".format(self.plane_size[0], self.plane_size[1])),
+                                            args=["local_{}".format(x) for x in func.args[1:]]
                                         )
                                     )
                                     return new_node
@@ -135,7 +136,7 @@ class PencilCompiler(Compiler):
             log_of_edge = min(log_of_edge, int(math.log(max_local_work_size_per_dim, 2)))
             log_of_edge = min(log_of_edge, int(math.log(self.global_work_size[1], 2)))
             tile_edge = int(math.pow(2, log_of_edge)) + (self.ghost_size[0] * 2)
-            tile_edge = 4  #TODO: remove this
+            # tile_edge = 4  #TODO: remove this
 
             self.plane_size = (tile_edge, tile_edge)
             self.plane_size_1d = reduce(operator.mul, self.plane_size)
@@ -232,6 +233,9 @@ class PencilCompiler(Compiler):
             parts.extend(
                 SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
                 for dim in range(len(self.reference_array_shape)))
+            parts.extend(
+                SymbolRef("local_{}_{}".format(self.index_name, dim), ctypes.c_ulong())
+                for dim in range(len(self.reference_array_shape)))
 
             # construct offset arrays for each iterations space
 
@@ -262,24 +266,43 @@ class PencilCompiler(Compiler):
                 )
 
                 if dim > 0:
-                    global_dim_mod = Div(SymbolRef(packed_local_index), Constant(self.local_work_modulus[dim-1]))
+                    space_index = Div(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim - 1]))
+                    space_index._force_parentheses = True
+                    modded_gobal_index = Mod(
+                        SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim - 1]))
+                    modded_gobal_index._force_parentheses = True
+                    modded_local_index = Mod(
+                        SymbolRef(packed_local_index), Constant(self.global_work_modulus[dim - 1]))
+                    modded_local_index._force_parentheses = True
 
-                    modulo_index = Mod(SymbolRef(packed_global_index), Constant(self.global_work_modulus[dim-1]))
-                    modulo_index._force_parentheses = True
                     arrays.append(
                         Assign(
                             SymbolRef("index_{}".format(dim)),
                             Add(
                                 Mul(
-                                    modulo_index,
-                                    ArrayRef(SymbolRef(dim_strides), global_dim_mod)
+                                    modded_gobal_index,
+                                    ArrayRef(SymbolRef(dim_strides), space_index)
                                 ),
-                                ArrayRef(SymbolRef(dim_offsets), global_dim_mod)
+                                ArrayRef(SymbolRef(dim_offsets), space_index)
+                            )
+                        )
+                    )
+
+                    arrays.append(
+                        Assign(
+                            SymbolRef("local_index_{}".format(dim)),
+                            Add(
+                                Mul(
+                                    modded_local_index,
+                                    ArrayRef(SymbolRef(dim_strides), space_index)
+                                ),
+                                ArrayRef(SymbolRef(dim_offsets), space_index)
                             )
                         )
                     )
 
             def debug_show_plane(n):
+                # return []
                 elements = self.plane_size[0]
                 return [
                     StringTemplate(
@@ -304,17 +327,12 @@ class PencilCompiler(Compiler):
             parts.extend(debug_show_plane(1))
 
             for_body = []
-            for_body.append(
-                StringTemplate(
-                   'printf("{}\\n", {});'.format(
-                       "group (%3d, %3d) thread %d packed_global_id_" + str(dim) + " %4d index (%4d, %4d, %4d)",
-                       "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) + ", index_0, index_1, index_2"
-                   )
-                )
-            )
+            # for_body.append(
+            #     StringTemplate("out[encode10_10_10(index_0, index_1, index_2)] = 12.34;")
+            # )
             #
             # Do the pencil iteration
-            body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name)
+            body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size)
             new_body = [body_transformer.visit(sub_node) for sub_node in node.body]
             for_body.extend([
                 self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
@@ -329,10 +347,23 @@ class PencilCompiler(Compiler):
                 Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
                 Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
             ])
+            for_body.append(
+                StringTemplate(
+                   'printf("{}\\n", {});'.format(
+                       "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
+                       " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
+                       "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
+                       ", index_0, index_1, index_2" +
+                       ", local_index_0, local_index_1, local_index_2" +
+                       ", out[encode{}(index_0, index_1, index_2)]".format("_".join([str(n) for n in self.reference_array_shape]))
+                   )
+                )
+            )
 
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
                 test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+                # test=LtE(SymbolRef("index_0"), Constant(self.ghost_size[0])),
                 incr=PostInc(SymbolRef("index_0")),
                 body=for_body
             )
@@ -374,6 +405,7 @@ class PencilCompiler(Compiler):
                 right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
 
                 def make_debug_printf():
+                    return(StringTemplate(""))
                     return StringTemplate(
                         ' printf("plane fill {}\\n", {});'.format(
                            "%6d, %6d, %6d, " + plane_name + "[ %6d ] = %6.4f",
