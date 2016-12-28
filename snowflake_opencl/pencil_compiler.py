@@ -31,6 +31,7 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
     def __init__(self, mesh_name, plane_size):
         self.mesh_name = mesh_name
         self.plane_size = plane_size
+        self.debug_plane_transformer = False
         super(PrimaryMeshToPlaneTransformer, self).__init__()
 
     # def visit(self, node):
@@ -39,25 +40,31 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
 
     def visit_BinaryOp(self, node):
         if isinstance(node.op, Op.ArrayRef):
-            print("in binary op: op is {}".format(node.op.__class__))
+            if self.debug_plane_transformer:
+                print("in binary op: op is {}".format(node.op.__class__))
             if isinstance(node.left, SymbolRef):
                 if node.left.name is self.mesh_name:
-                    print("found mesh name {}, right is {}".format(self.mesh_name, type(node.right)))
+                    if self.debug_plane_transformer:
+                        print("found mesh name {}, right is {}".format(self.mesh_name, type(node.right)))
                     if isinstance(node.right, FunctionCall) and isinstance(node.right.func, SymbolRef):
-                        print("Function call is {}".format(node.right.func))
+                        if self.debug_plane_transformer:
+                            print("Function call is {}".format(node.right.func))
                         m = re.match('encode(\d+)_(\d+)_(\d+)', node.right.func.name)
                         if m:
-                            print("got encode {} {} {}".format(m.group(1), m.group(2), m.group(3)))
+                            if self.debug_plane_transformer:
+                                print("got encode {} {} {}".format(m.group(1), m.group(2), m.group(3)))
                             func = node.right
                             if isinstance(func.args[0], BinaryOp) and isinstance(func.args[0].op, Op.Add):
                                 add = func.args[0]
                                 if isinstance(add.right, Constant):
-                                    print("index_0 offset is {}".format(add.right.value))
+                                    if self.debug_plane_transformer:
+                                        print("index_0 offset is {}".format(add.right.value))
 
                                     new_node = ArrayRef(
                                         SymbolRef("plane_{}".format(1+add.right.value)),
                                         FunctionCall(
-                                            func=SymbolRef("encode{}_{}".format(self.plane_size[0], self.plane_size[1])),
+                                            func=SymbolRef("encode{}_{}".format(
+                                                self.plane_size[0], self.plane_size[1])),
                                             args=["local_{}".format(x) for x in func.args[1:]]
                                         )
                                     )
@@ -100,6 +107,10 @@ class PencilCompiler(Compiler):
             self.global_work_size_1d = None
             self.local_work_modulus = None
             self.global_work_modulus = None
+
+            self.debug_plane_fill = False
+            self.debug_plane_values = False
+            self.debug_kernel_indices = False
 
             super(PencilCompiler.PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
 
@@ -301,16 +312,18 @@ class PencilCompiler(Compiler):
                         )
                     )
 
-            def debug_show_plane(n):
-                return []
+            def debug_show_plane(plane_number):
+                if not self.debug_plane_values:
+                    return []
+
                 elements = self.plane_size[0]
                 return [
                     StringTemplate(
-                        'if(thread_id == 0) {{printf("{}\\n", {});}}'.format(
-                           "pfwg %4d %4d  %4d   " + ",".join(["%6.4f " for x in range(elements)]),
-                           "group_id_0, group_id_1, " + str(n) + ", " +
-                           ",".join(["plane_" + str(n) + "[{}]".format(
-                               (y * elements) + x) for x in range(elements)])
+                        'if(thread_id == 0) {{printf("{}\\plane_number", {});}}'.format(
+                           "pfwg %4d %4d  %4d   " + ",".join(["%6.4f " for _ in range(elements)]),
+                           "group_id_0, group_id_1, " + str(plane_number) + ", " +
+                           ",".join(["plane_" + str(plane_number) + "[{}]".format(
+                               (y * elements) + x_val) for x_val in range(elements)])
                         )
                     )
                     for y in range(elements)
@@ -347,19 +360,22 @@ class PencilCompiler(Compiler):
                 Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
                 Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
             ])
-            # for_body.append(
-            #     StringTemplate(
-            #        'printf("{}\\n", {});'.format(
-            #            "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
-            #            " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
-            #            "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
-            #            ", index_0, index_1, index_2" +
-            #            ", local_index_0, local_index_1, local_index_2" +
-            #            ", out[encode{}(index_0, index_1, index_2)]".format("_".join([str(n) for n in self.reference_array_shape]))
-            #        )
-            #
-            #    )
-            # )
+
+            if self.debug_kernel_indices:
+                for_body.append(
+                    StringTemplate(
+                       'printf("{}\\n", {});'.format(
+                           "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
+                           " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
+                           "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
+                           ", index_0, index_1, index_2" +
+                           ", local_index_0, local_index_1, local_index_2" +
+                           ", out[encode{}(index_0, index_1, index_2)]".format(
+                               "_".join([str(n) for n in self.reference_array_shape])
+                           )
+                       )
+                    )
+                )
 
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
@@ -406,7 +422,9 @@ class PencilCompiler(Compiler):
                 right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
 
                 def make_debug_printf():
-                    return(StringTemplate(""))
+                    if not self.debug_plane_fill:
+                        return StringTemplate("")
+
                     return StringTemplate(
                         ' printf("plane fill {}\\n", {});'.format(
                            "%6d, %6d, %6d, " + plane_name + "[ %6d ] = %6.4f",
@@ -428,7 +446,6 @@ class PencilCompiler(Compiler):
                 else:
                     final.append(Assign(left, right))
                     final.append(make_debug_printf())
-
 
                 index += local_size
             return final
