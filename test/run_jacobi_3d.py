@@ -4,18 +4,22 @@ import numpy as np
 import pycl as cl
 import time
 
+import sys
+
 from snowflake_opencl.pencil_compiler import PencilCompiler
 from snowflake_opencl.util import print_mesh
 
 from snowflake.nodes import StencilComponent, WeightArray, Stencil
 
-from snowflake_opencl.compiler import NDBuffer, OpenCLCompiler
+from snowflake_opencl.compiler import OpenCLCompiler
+from snowflake_opencl.nd_buffer import NDBuffer
 
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 514
+    size = 514 if len(sys.argv) < 2 else int(sys.argv[1])
+
     import logging
     logging.basicConfig(level=20)
 
@@ -64,6 +68,23 @@ if __name__ == '__main__':
     compiler = OpenCLCompiler(ctx)
     jacobi_operator = compiler.compile(jacobi_stencil)
 
+    start_time_2 = time.time()
+
+    jacobi_operator(out_buf, in_buf)
+    buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
+
+    out_evt.wait()
+
+    end_time_2 = time.time()
+
+    print("Input " + "=" * 80)
+    print_mesh(buffer_in)
+    print("Output" + "=" * 80)
+    print_mesh(buffer_out)
+
+    pencil_compiler = PencilCompiler(ctx, device)
+    jacobi_operator = pencil_compiler.compile(jacobi_stencil)
+
     start_time = time.time()
 
     jacobi_operator(out_buf, in_buf)
@@ -80,4 +101,5 @@ if __name__ == '__main__':
 
     # print("in buf\n" + buffer_in.ary[0,0,0:10])
     # print("out buf\n" + buffer_out[1][1][0:10])
-    print("done in {} seconds".format(end_time - start_time))
+    print("pencil_compiler done in {} seconds".format(end_time - start_time))
+    print("compiler        done in {} seconds".format(end_time_2 - start_time_2))

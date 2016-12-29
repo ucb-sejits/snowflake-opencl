@@ -16,21 +16,11 @@ from ctree.types import get_ctype
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
+from snowflake_opencl.nd_buffer import NDBuffer
 
 from snowflake_opencl.ocl_tiler import OclTiler
 
 __author__ = 'dorthy luu'
-
-
-class NDBuffer(object):
-    def __init__(self, queue, ary, blocking=True):
-        self.ary = ary
-        self.shape = ary.shape
-        self.dtype = ary.dtype
-        self.ndim = ary.ndim
-        self.buffer, evt = cl.buffer_from_ndarray(queue, ary)
-        if blocking:
-            evt.wait()
 
 
 class OpenCLCompiler(Compiler):
