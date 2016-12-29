@@ -339,10 +339,13 @@ class PencilCompiler(Compiler):
             parts.append(StringTemplate("    //"))
             parts.append(StringTemplate("    // Fill the first local memory planes"))
             parts.append(StringTemplate("    //"))
-            parts.extend(self.fill_plane("plane_0", Constant(0)))
-            parts.extend(debug_show_plane(0))
-            parts.extend(self.fill_plane("plane_1", Constant(1)))
+            parts.extend(self.fill_plane("plane_1", Constant(0)))
             parts.extend(debug_show_plane(1))
+            parts.extend(self.fill_plane("plane_2", Constant(1)))
+            parts.extend(debug_show_plane(2))
+            parts.extend([
+                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
+            ])
 
             for_body = []
             # for_body.append(
@@ -352,6 +355,14 @@ class PencilCompiler(Compiler):
             # Do the pencil iteration
             body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size)
             new_body = [body_transformer.visit(sub_node) for sub_node in node.body]
+
+            for_body.extend([
+                Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
+                Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
+                Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
+                Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
+            ])
+
             for_body.extend([
                 self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
@@ -360,19 +371,16 @@ class PencilCompiler(Compiler):
             for_body.extend(new_body)
             # for_body.extend(node.body)
             for_body.extend([
-                Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
-                Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
-                Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
-                Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
+                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ])
 
             if self.debug_kernel_indices:
                 for_body.append(
                     StringTemplate(
                        'printf("{}\\n", {});'.format(
-                           "group (%3d, %3d) thread %d packed_global_id_" + str(dim) +
-                           " %4d index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
-                           "group_id_0, group_id_1, thread_id, packed_global_id_" + str(dim) +
+                           "group (%3d, %3d) thread %d packed_global_id (%5d, %5d) " +
+                           "index (%4d, %4d, %4d) local_index (%4d, %4d, %4d) out %6.4f",
+                           "group_id_0, group_id_1, thread_id, packed_global_id_1, packed_global_id_2" +
                            ", index_0, index_1, index_2" +
                            ", local_index_0, local_index_1, local_index_2" +
                            ", out[encode{}(index_0, index_1, index_2)]".format(

@@ -208,7 +208,7 @@ def print_mesh(mesh, message=None):
             for j in range(max_j-1, -1, -1):
                 print(" "*j*2, end="")
                 for k in range(max_k):
-                    print("{:10.2f}".format(mesh[(i, j, k)]), end=" ")
+                    print("{:10.4f}".format(mesh[(i, j, k)]), end=" ")
                 print()
             print()
         print()
