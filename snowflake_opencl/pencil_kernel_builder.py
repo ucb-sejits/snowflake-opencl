@@ -75,13 +75,17 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         log_of_edge = int(math.log(max_size_per_dim - (self.ghost_size[0] * 2), 2))
         log_of_edge = min(log_of_edge, int(math.log(max_local_work_size_per_dim, 2)))
         log_of_edge = min(log_of_edge, int(math.log(self.global_work_size[1], 2)))
-        tile_edge = int(math.pow(2, log_of_edge)) + (self.ghost_size[0] * 2)
+        lws_1 = int(math.pow(2, log_of_edge))
+        lws_2 = lws_1
+        if lws_1 * lws_2 < self.device.max_work_group_size and lws_1 * (lws_2 * 2) <= self.device.max_work_group_size:
+            lws_2 *= 2
+
         # tile_edge = 4  #TODO: remove this
 
-        self.plane_size = (tile_edge, tile_edge)
+        self.plane_size = (lws_1 + (self.ghost_size[0] * 2), lws_2 + (self.ghost_size[1] * 2))
         self.plane_size_1d = reduce(operator.mul, self.plane_size)
 
-        self.local_work_size = (tile_edge - (self.ghost_size[0] * 2), tile_edge - (self.ghost_size[0] * 2))
+        self.local_work_size = (lws_1, lws_2)
         self.local_work_size_1d = reduce(operator.mul, self.local_work_size)
 
     def get_local_memory_declarations(self):
@@ -157,7 +161,7 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             Assign(
                 SymbolRef("thread_id", ctypes.c_ulong()),
                 Add(
-                    Mul(SymbolRef("packed_local_id_1"), Constant(self.local_work_size[0])),
+                    Mul(SymbolRef("packed_local_id_1"), Constant(self.local_work_size[1])),
                     SymbolRef("packed_local_id_2")
                 )
             ),
@@ -341,7 +345,7 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             local_location._force_parentheses = True
             left = ArrayRef(SymbolRef(name=plane_name), local_location)
 
-            index_1 = Div(local_location, Constant(self.plane_size[0]))
+            index_1 = Div(local_location, Constant(self.plane_size[1]))
             index_1._force_parentheses = True
             index_2 = Mod(local_location, Constant(self.plane_size[1]))
             index_2._force_parentheses = True
