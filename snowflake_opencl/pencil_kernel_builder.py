@@ -1,13 +1,13 @@
 import ctypes
 import operator
 
-from ctree.c.nodes import Constant, SymbolRef, Assign, FunctionCall, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, \
-    LtE
+from ctree.c.nodes import Constant, SymbolRef, Assign, FunctionCall, \
+    ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, LtE
 from ctree.c.nodes import MultiNode
 from ctree.templates.nodes import StringTemplate
 
 # noinspection PyProtectedMember
-from snowflake.stencil_compiler import Compiler, CCompiler
+from snowflake.stencil_compiler import CCompiler
 import math
 
 from snowflake_opencl.primary_mesh_to_plane_transformer import PrimaryMeshToPlaneTransformer
