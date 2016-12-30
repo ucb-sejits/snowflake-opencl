@@ -160,6 +160,9 @@ class OpenCLCompiler(Compiler):
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
+        def build_regular_kernel(self):
+            None
+
         # noinspection PyProtectedMember
         def transform(self, tree, program_config):
             """
