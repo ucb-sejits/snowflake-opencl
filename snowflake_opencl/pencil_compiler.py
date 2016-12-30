@@ -22,59 +22,9 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 import math
 
 from snowflake_opencl.nd_buffer import NDBuffer
+from snowflake_opencl.primary_mesh_to_plane_transformer import PrimaryMeshToPlaneTransformer
 
-__author__ = 'Chick Markley, Seunghwan Choi'
-
-
-# noinspection PyPep8Naming
-class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
-    def __init__(self, mesh_name, plane_size):
-        self.mesh_name = mesh_name
-        self.plane_size = plane_size
-        self.debug_plane_transformer = False
-        super(PrimaryMeshToPlaneTransformer, self).__init__()
-
-    # def visit(self, node):
-    #     print("override visit node: {}".format(node.__class__))
-    #     return super(PrimaryMeshToPlaneTransformer, self).visit(node)
-
-    def visit_BinaryOp(self, node):
-        if isinstance(node.op, Op.ArrayRef):
-            if self.debug_plane_transformer:
-                print("in binary op: op is {}".format(node.op.__class__))
-            if isinstance(node.left, SymbolRef):
-                if node.left.name is self.mesh_name:
-                    if self.debug_plane_transformer:
-                        print("found mesh name {}, right is {}".format(self.mesh_name, type(node.right)))
-                    if isinstance(node.right, FunctionCall) and isinstance(node.right.func, SymbolRef):
-                        if self.debug_plane_transformer:
-                            print("Function call is {}".format(node.right.func))
-                        m = re.match('encode(\d+)_(\d+)_(\d+)', node.right.func.name)
-                        if m:
-                            if self.debug_plane_transformer:
-                                print("got encode {} {} {}".format(m.group(1), m.group(2), m.group(3)))
-                            func = node.right
-                            if isinstance(func.args[0], BinaryOp) and isinstance(func.args[0].op, Op.Add):
-                                add = func.args[0]
-                                if isinstance(add.right, Constant):
-                                    if self.debug_plane_transformer:
-                                        print("index_0 offset is {}".format(add.right.value))
-
-                                    new_node = ArrayRef(
-                                        SymbolRef("plane_{}".format(1+add.right.value)),
-                                        FunctionCall(
-                                            func=SymbolRef("encode{}_{}".format(
-                                                self.plane_size[0], self.plane_size[1])),
-                                            args=["local_{}".format(x) for x in func.args[1:]]
-                                        )
-                                    )
-                                    return new_node
-
-        return BinaryOp(
-            left=self.visit(node.left),
-            op=node.op,
-            right=self.visit(node.right)
-        )
+__author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 
 class PencilCompiler(Compiler):
@@ -487,7 +437,7 @@ class PencilCompiler(Compiler):
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None, device=None, local=False, loop=1):
+                     _hash=None, context=None, device=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
@@ -504,8 +454,6 @@ class PencilCompiler(Compiler):
             self.device = device
             self.global_work_size = 0
             self.local_work_size = 0
-            self.local = local
-            self.loop = loop
 
         # noinspection PyUnusedLocal
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
@@ -544,6 +492,7 @@ class PencilCompiler(Compiler):
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
+
             self.parent_cls.IndexOpToEncode(name_shape_map).visit(tree)
             c_tree = PyBasicConversions().visit(tree)
 
@@ -640,7 +589,6 @@ class PencilCompiler(Compiler):
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
 
-            # control.append(StringTemplate("""clFinish(queue);"""))
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
@@ -691,7 +639,7 @@ class PencilCompiler(Compiler):
                 )
             )
 
-    def _post_process(self, original, compiled, index_name, local=False, loop=1):
+    def _post_process(self, original, compiled, index_name, **kwargs):
         return self.LazySpecializedKernel(
             py_ast=compiled,
             original=original,
@@ -701,6 +649,4 @@ class PencilCompiler(Compiler):
             _hash=hash(original),
             context=self.context,
             device=self.device,
-            local=local,
-            loop=loop
         )

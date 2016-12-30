@@ -16,18 +16,20 @@ from ctree.types import get_ctype
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-from snowflake_opencl.nd_buffer import NDBuffer
+import math
 
+from snowflake_opencl.nd_buffer import NDBuffer
 from snowflake_opencl.ocl_tiler import OclTiler
 
-__author__ = 'dorthy luu'
+__author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 
 class OpenCLCompiler(Compiler):
 
-    def __init__(self, context):
+    def __init__(self, context, device=None):
         super(OpenCLCompiler, self).__init__()
         self.context = context
+        self.device = device if device else cl.clGetDeviceIDs()[-1]
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
@@ -116,7 +118,7 @@ class OpenCLCompiler(Compiler):
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None):
+                     _hash=None, context=None, device=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
@@ -130,12 +132,14 @@ class OpenCLCompiler(Compiler):
             self.snowflake_ast = original
             self.parent_cls = OpenCLCompiler
             self.context = context
+            self.device = device
             self.global_work_size = 0
             self.local_work_size = 0
 
+        # noinspection PyUnusedLocal
         def insert_indexing_debugging_printfs(self, shape, name_index=None):
-            format_string = 'wgid %03d gid %04d'
-            argument_string = 'get_group_id(0), global_id,'
+            format_string = 'wgid %03d gid1 %04d gid2 %04d'
+            argument_string = 'get_group_id(0), packed_global_id_1, packed_global_id_2,'
             # noinspection PyProtectedMember
             encode_string = 'encode'+CCompiler._shape_to_str(shape)
 
@@ -156,14 +160,16 @@ class OpenCLCompiler(Compiler):
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
 
+        # noinspection PyProtectedMember
         def transform(self, tree, program_config):
             """
-            The tree is based on a snowflake stencil group which makes it one or more
+            The tree is a snowflake stencil group which makes it one or more
             Stencil Operations.  This
             :param tree:
             :param program_config:
             :return:
             """
+
             subconfig, tuning_config = program_config
             name_shape_map = {name: arg.shape for name, arg in subconfig.items()}
             shapes = set(name_shape_map.values())
@@ -173,10 +179,13 @@ class OpenCLCompiler(Compiler):
 
             encode_funcs = []
             for shape in shapes:
-                # noinspection PyProtectedMember
                 encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape), shape))
+                # the second one here is for indexing the local memory planes
+                encode_funcs.append(generate_encode_macro('encode'+CCompiler._shape_to_str(shape[1:]), shape[1:]))
 
-            includes = [StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable")]  # should add this to ctree
+            includes = []
+            if "cl_khr_fp64" in self.device.extensions:
+                includes.append(StringTemplate("#pragma OPENCL EXTENSION cl_khr_fp64 : enable"))
 
             ocl_files, kernels = [], []
             control = [Assign(SymbolRef("error_code", ctypes.c_int()), Constant(0))]
@@ -185,7 +194,7 @@ class OpenCLCompiler(Compiler):
 
             # build a bunch of kernels
             #
-            for i, (target, i_space, stencil_node) in enumerate(
+            for kernel_number, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
                 shape = subconfig[target].shape
@@ -218,7 +227,7 @@ class OpenCLCompiler(Compiler):
                          arg if not isinstance(arg, NDBuffer) else arg.ary.ravel()  # hack
                      ), _global=True) for arg_name, arg in subconfig.items()
                    ]
-                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % i), params=kernel_params, defn=[sub])
+                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % kernel_number), params=kernel_params, defn=[sub])
                 kernel_func.set_kernel()
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
@@ -262,7 +271,6 @@ class OpenCLCompiler(Compiler):
                 control.append(BitOrAssign(error_code, enqueue_call))
                 control.append(StringTemplate("""clFinish(queue);"""))
 
-            control.append(StringTemplate("""clFinish(queue);"""))
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
             control.append(Return(SymbolRef("error_code")))
             # should do bit or assign for error code
@@ -321,5 +329,6 @@ class OpenCLCompiler(Compiler):
             index_name=index_name,
             target_names=[stencil.primary_mesh for stencil in original.body if hasattr(stencil, "primary_mesh")],
             _hash=hash(original),
-            context=self.context
+            context=self.context,
+            device=self.device,
         )
