@@ -27,10 +27,11 @@ if __name__ == '__main__':
     parser.add_argument("-lm", "--use-local-mem", action="store_true")
     parser.add_argument("-po", "--use-plane-offsets", action="store_true")
     parser.add_argument("-sm", "--show-mesh", action="store_true")
+    parser.add_argument("-ei", "--enqueue-iterations", type=int)
     args = parser.parse_args()
 
     size = args.size
-    settings = Settings(args.use_local_mem, args.use_plane_offsets)
+    settings = Settings(args.use_local_mem, args.use_plane_offsets, args.enqueue_iterations)
     test_method = args.test_method
     iterations = args.iterations
     show_mesh = args.show_mesh
@@ -81,7 +82,7 @@ if __name__ == '__main__':
 
     jacobi_stencil = Stencil(sc, 'out', ((1, size-1, 1),) * 3, primary_mesh='out')
 
-    compiler = OpenCLCompiler(ctx)
+    compiler = OpenCLCompiler(ctx, device, settings)
 
     jacobi_operator = compiler.compile(jacobi_stencil)
 

@@ -4,7 +4,7 @@ import operator
 import pycl as cl
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile
+    Assign, Array, FunctionCall, Ref, Return, CFile, For, LtE, PostInc, Lt
 from ctree.c.nodes import MultiNode, BitOrAssign
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
@@ -26,10 +26,11 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 class OpenCLCompiler(Compiler):
 
-    def __init__(self, context, device=None):
+    def __init__(self, context, device=None, settings=None):
         super(OpenCLCompiler, self).__init__()
         self.context = context
         self.device = device if device else cl.clGetDeviceIDs()[-1]
+        self.settings = settings
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
@@ -118,12 +119,13 @@ class OpenCLCompiler(Compiler):
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None, device=None):
+                     _hash=None, context=None, device=None, settings=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
             self.target_names = target_names
             self.index_name = index_name
+            self.settings = settings
 
             super(OpenCLCompiler.LazySpecializedKernel, self).__init__(
                 py_ast, names, target_names, index_name, _hash
@@ -271,7 +273,14 @@ class OpenCLCompiler(Compiler):
                                    SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
                                    gws_arrays[gws], lws_arrays[local_work_size_1d], Constant(0), NULL(), NULL()
                                ])
-                control.append(BitOrAssign(error_code, enqueue_call))
+                if self.settings.enqueue_iterations > 1:
+                    enqueue_call = For(
+                            init=Assign(SymbolRef("kernel_pass"), Constant(0)),
+                            test=Lt(SymbolRef("kernel_pass"), Constant(self.settings.enqueue_iterations)),
+                            incr=PostInc(SymbolRef("kernel_pass")),
+                            body=[BitOrAssign(error_code, enqueue_call)]
+                        )
+                control.append(enqueue_call)
                 control.append(StringTemplate("""clFinish(queue);"""))
 
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
@@ -334,4 +343,5 @@ class OpenCLCompiler(Compiler):
             _hash=hash(original),
             context=self.context,
             device=self.device,
+            settings=self.settings
         )

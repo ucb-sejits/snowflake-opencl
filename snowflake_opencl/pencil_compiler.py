@@ -214,7 +214,16 @@ class PencilCompiler(Compiler):
                                    SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(2), NULL(),
                                    gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
                                ])
-                control.append(BitOrAssign(error_code, enqueue_call))
+                enqueue_call = BitOrAssign(error_code, enqueue_call)
+                if self.settings.enqueue_iterations > 1:
+                    enqueue_call = For(
+                            init=Assign(SymbolRef("kernel_pass"), Constant(0)),
+                            test=Lt(SymbolRef("kernel_pass"), Constant(self.settings.enqueue_iterations)),
+                            incr=PostInc(SymbolRef("kernel_pass")),
+                            body=[enqueue_call]
+                        )
+                control.append(enqueue_call)
+
                 control.append(StringTemplate("""clFinish(queue);"""))
 
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
