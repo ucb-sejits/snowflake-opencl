@@ -26,12 +26,14 @@ if __name__ == '__main__':
     parser.add_argument("-i", "--iterations", type=int)
     parser.add_argument("-lm", "--use-local-mem", action="store_true")
     parser.add_argument("-po", "--use-plane-offsets", action="store_true")
+    parser.add_argument("-sm", "--show-mesh", action="store_true")
     args = parser.parse_args()
 
     size = args.size
     settings = Settings(args.use_local_mem, args.use_plane_offsets)
     test_method = args.test_method
     iterations = args.iterations
+    show_mesh = args.show_mesh
     import logging
     # logging.basicConfig(level=20)
 
@@ -93,10 +95,11 @@ if __name__ == '__main__':
 
     end_time = time.time()
 
-    print("Input " + "=" * 80)
-    print_mesh(buffer_in)
-    print("Output" + "=" * 80)
-    print_mesh(buffer_out)
+    if show_mesh:
+        print("Input " + "=" * 80)
+        print_mesh(buffer_in)
+        print("Output" + "=" * 80)
+        print_mesh(buffer_out)
 
     pencil_compiler = PencilCompiler(ctx, device, settings)
     jacobi_operator_pencil = pencil_compiler.compile(jacobi_stencil)
@@ -111,10 +114,11 @@ if __name__ == '__main__':
 
     end_time_pencil = time.time()
 
-    # print("Input " + "=" * 80)
-    # print_mesh(buffer_in)
-    # print("Output" + "=" * 80)
-    # print_mesh(buffer_out_pencil)
+    if show_mesh:
+        print("Input " + "=" * 80)
+        print_mesh(buffer_in)
+        print("Output" + "=" * 80)
+        print_mesh(buffer_out_pencil)
 
     if test_method == "numpy":
         np.testing.assert_array_almost_equal(buffer_out, buffer_out_pencil, decimal=4)
