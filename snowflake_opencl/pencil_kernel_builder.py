@@ -16,12 +16,14 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 
 class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
-    def __init__(self, index_name, reference_array_shape, stencil, device):
+    def __init__(self, index_name, reference_array_shape, stencil, device, settings):
         self.stencil = stencil
         self.stencil_node = stencil.op_tree
         self.ghost_size = tuple((x - 1)/2 for x in self.stencil_node.weights.shape)
         self.device = device
         self.use_doubles = "cl_khr_fp64" in self.device.extensions
+        self.use_local_mem = settings.use_local_mem
+        self.settings = settings
 
         self.planes = self.stencil_node.weights.shape[0]
 
@@ -77,11 +79,10 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         log_of_edge = min(log_of_edge, int(math.log(self.global_work_size[1], 2)))
         lws_1 = int(math.pow(2, log_of_edge))
         lws_2 = lws_1
+        # looks to see if we can increase the size of the unit stride dimension by a factor of 2
         if lws_1 * lws_2 < self.device.max_work_group_size and lws_1 * (lws_2 * 2) <= self.device.max_work_group_size:
             if lws_2 * 2 <= self.global_work_size[1]:
                 lws_2 *= 2
-
-        # tile_edge = 4  #TODO: remove this
 
         self.plane_size = (lws_1 + (self.ghost_size[0] * 2), lws_2 + (self.ghost_size[1] * 2))
         self.plane_size_1d = reduce(operator.mul, self.plane_size)
@@ -269,40 +270,40 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 StringTemplate(
                     'if(thread_id == 0) {printf("launching kernel %3d%3d\\n", group_id_0, group_id_1);}'))
 
-        parts.append(StringTemplate("    //"))
-        parts.append(StringTemplate("    // Fill the first local memory planes"))
-        parts.append(StringTemplate("    //"))
-        parts.extend(self.fill_plane("plane_1", Constant(0)))
-        parts.extend(debug_show_plane(1))
-        parts.extend(self.fill_plane("plane_2", Constant(1)))
-        parts.extend(debug_show_plane(2))
-        parts.extend([
-            StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
-        ])
-
         for_body = []
-        # for_body.append(
-        #     StringTemplate("out[encode10_10_10(index_0, index_1, index_2)] = 12.34;")
-        # )
-        #
-        # Do the pencil iteration
-        body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size)
-        new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
 
-        parts.extend(body_transformer.plane_offsets)
+        if self.use_local_mem:
+            parts.append(StringTemplate("    //"))
+            parts.append(StringTemplate("    // Fill the first local memory planes"))
+            parts.append(StringTemplate("    //"))
+            parts.extend(self.fill_plane("plane_1", Constant(0)))
+            parts.extend(debug_show_plane(1))
+            parts.extend(self.fill_plane("plane_2", Constant(1)))
+            parts.extend(debug_show_plane(2))
+            parts.extend([
+                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
+            ])
 
-        for_body.extend([
-            Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
-            Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
-            Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
-            Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
-        ])
+            body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size, self.settings)
+            new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
 
-        for_body.extend([
-            self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
-            StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
-        ])
-        for_body.extend(debug_show_plane(2))
+            parts.extend(body_transformer.plane_offsets)
+
+            for_body.extend([
+                Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
+                Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
+                Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
+                Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
+            ])
+
+            for_body.extend([
+                self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
+                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
+            ])
+            for_body.extend(debug_show_plane(2))
+        else:
+            new_body = node.body
+
         for_body.extend(new_body)
         # for_body.extend(node.body)
         for_body.extend([

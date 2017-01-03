@@ -9,10 +9,11 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 # noinspection PyPep8Naming
 class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
-    def __init__(self, mesh_name, plane_size):
+    def __init__(self, mesh_name, plane_size, settings):
         self.mesh_name = mesh_name
         self.plane_size = plane_size
         self.debug_plane_transformer = False
+        self.optimize_plane_offsets = settings.use_plane_offsets
         self.stage = 0
         self.neighbor_id = 0
         self.plane_source_id = 0
@@ -46,21 +47,32 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
                                         if self.debug_plane_transformer:
                                             print("index_0 offset is {}".format(add.right.value))
 
-                                        neighbor_name = "neighbor_{}".format(self.neighbor_id)
-                                        self.neighbor_id += 1
-                                        neighbor_symbol_init = SymbolRef(neighbor_name, ctypes.c_ulong())
-                                        neighbor_symbol = SymbolRef(neighbor_name)
-                                        plane_offset = FunctionCall(
-                                                func=SymbolRef("encode{}_{}".format(
-                                                    self.plane_size[0], self.plane_size[1])),
-                                                args=["local_{}".format(x) for x in func.args[1:]]
+                                        if not self.optimize_plane_offsets:
+                                            new_node = ArrayRef(
+                                                SymbolRef("plane_{}".format(1+add.right.value)),
+                                                FunctionCall(
+                                                    func=SymbolRef("encode{}_{}".format(
+                                                        self.plane_size[0], self.plane_size[1])),
+                                                    args=["local_{}".format(x) for x in func.args[1:]]
+                                                )
                                             )
-                                        self.plane_offsets.append(Assign(neighbor_symbol_init, plane_offset))
-                                        new_node = ArrayRef(
-                                            SymbolRef("plane_{}".format(1+add.right.value)),
-                                            neighbor_symbol
-                                        )
-                                        return new_node
+                                            return new_node
+                                        else:
+                                            neighbor_name = "neighbor_{}".format(self.neighbor_id)
+                                            self.neighbor_id += 1
+                                            neighbor_symbol_init = SymbolRef(neighbor_name, ctypes.c_ulong())
+                                            neighbor_symbol = SymbolRef(neighbor_name)
+                                            plane_offset = FunctionCall(
+                                                    func=SymbolRef("encode{}_{}".format(
+                                                        self.plane_size[0], self.plane_size[1])),
+                                                    args=["local_{}".format(x) for x in func.args[1:]]
+                                                )
+                                            self.plane_offsets.append(Assign(neighbor_symbol_init, plane_offset))
+                                            new_node = ArrayRef(
+                                                SymbolRef("plane_{}".format(1+add.right.value)),
+                                                neighbor_symbol
+                                            )
+                                            return new_node
 
         return BinaryOp(
             left=self.visit(node.left),

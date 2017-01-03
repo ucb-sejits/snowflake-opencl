@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import argparse
 import numpy as np
 import pycl as cl
 import time
@@ -13,15 +14,24 @@ from snowflake.nodes import StencilComponent, WeightArray, Stencil
 
 from snowflake_opencl.compiler import OpenCLCompiler
 from snowflake_opencl.nd_buffer import NDBuffer
+from snowflake_opencl.settings import Settings
 
 __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 10 if len(sys.argv) < 2 else int(sys.argv[1])
-    test_method = "numpy" if len(sys.argv) < 3 else sys.argv[2]
-    iterations = 1 if len(sys.argv) < 4 else int(sys.argv[3])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("size", type=int, help="mesh edge size")
+    parser.add_argument("-t", "--test-method", type=str)
+    parser.add_argument("-i", "--iterations", type=int)
+    parser.add_argument("-lm", "--use-local-mem", action="store_true")
+    parser.add_argument("-po", "--use-plane-offsets", action="store_true")
+    args = parser.parse_args()
 
+    size = args.size
+    settings = Settings(args.use_local_mem, args.use_plane_offsets)
+    test_method = args.test_method
+    iterations = args.iterations
     import logging
     # logging.basicConfig(level=20)
 
@@ -88,7 +98,7 @@ if __name__ == '__main__':
     print("Output" + "=" * 80)
     print_mesh(buffer_out)
 
-    pencil_compiler = PencilCompiler(ctx, device)
+    pencil_compiler = PencilCompiler(ctx, device, settings)
     jacobi_operator_pencil = pencil_compiler.compile(jacobi_stencil)
 
     start_time_pencil = time.time()

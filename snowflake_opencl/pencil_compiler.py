@@ -30,10 +30,11 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 class PencilCompiler(Compiler):
 
-    def __init__(self, context, device):
+    def __init__(self, context, device, settings):
         super(PencilCompiler, self).__init__()
         self.context = context
         self.device = device
+        self.settings = settings
 
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
@@ -62,12 +63,13 @@ class PencilCompiler(Compiler):
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
-                     _hash=None, context=None, device=None):
+                     _hash=None, context=None, device=None, settings=None):
 
             self.__hash = _hash if _hash is not None else hash(py_ast)
             self.names = names
             self.target_names = target_names
             self.index_name = index_name
+            self.settings = settings
 
             super(PencilCompiler.LazySpecializedKernel, self).__init__(
                 py_ast, names, target_names, index_name, _hash
@@ -146,6 +148,7 @@ class PencilCompiler(Compiler):
                     subconfig[target].shape,
                     stencil_node,
                     self.device,
+                    self.settings
                 )
 
                 kernel_body = kernel_builder.visit(i_space)
@@ -274,4 +277,5 @@ class PencilCompiler(Compiler):
             _hash=hash(original),
             context=self.context,
             device=self.device,
+            settings=self.settings
         )
