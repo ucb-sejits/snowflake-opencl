@@ -18,12 +18,12 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
-    size = 514 if len(sys.argv) < 2 else int(sys.argv[1])
+    size = 10 if len(sys.argv) < 2 else int(sys.argv[1])
     test_method = "numpy" if len(sys.argv) < 3 else sys.argv[2]
-    iterations = 10 if len(sys.argv) < 4 else int(sys.argv[3])
+    iterations = 1 if len(sys.argv) < 4 else int(sys.argv[3])
 
     import logging
-    logging.basicConfig(level=20)
+    # logging.basicConfig(level=20)
 
     np.random.seed(0)
 
@@ -101,10 +101,10 @@ if __name__ == '__main__':
 
     end_time_pencil = time.time()
 
-    print("Input " + "=" * 80)
-    print_mesh(buffer_in)
-    print("Output" + "=" * 80)
-    print_mesh(buffer_out_pencil)
+    # print("Input " + "=" * 80)
+    # print_mesh(buffer_in)
+    # print("Output" + "=" * 80)
+    # print_mesh(buffer_out_pencil)
 
     if test_method == "numpy":
         np.testing.assert_array_almost_equal(buffer_out, buffer_out_pencil, decimal=4)

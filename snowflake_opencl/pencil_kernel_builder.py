@@ -78,7 +78,8 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         lws_1 = int(math.pow(2, log_of_edge))
         lws_2 = lws_1
         if lws_1 * lws_2 < self.device.max_work_group_size and lws_1 * (lws_2 * 2) <= self.device.max_work_group_size:
-            lws_2 *= 2
+            if lws_2 * 2 <= self.global_work_size[1]:
+                lws_2 *= 2
 
         # tile_edge = 4  #TODO: remove this
 
@@ -286,7 +287,9 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         #
         # Do the pencil iteration
         body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size)
-        new_body = [body_transformer.visit(sub_node) for sub_node in node.body]
+        new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
+
+        parts.extend(body_transformer.plane_offsets)
 
         for_body.extend([
             Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
