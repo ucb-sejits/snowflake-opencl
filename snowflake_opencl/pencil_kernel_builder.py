@@ -11,6 +11,7 @@ from snowflake.stencil_compiler import CCompiler
 import math
 
 from snowflake_opencl.primary_mesh_to_plane_transformer import PrimaryMeshToPlaneTransformer
+from snowflake_opencl.primary_mesh_to_register_transformer import PrimaryMeshToRegisterTransformer
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
@@ -23,6 +24,7 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         self.device = device
         self.use_doubles = "cl_khr_fp64" in self.device.extensions
         self.use_local_mem = settings.use_local_mem
+        self.use_local_register = settings.use_local_register
         self.settings = settings
 
         self.planes = self.stencil_node.weights.shape[0]
@@ -48,8 +50,11 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
     def number_size(self):
         return 8 if self.use_doubles else 4
 
-    def number_type(self):
+    def number_type_name(self):
         return "double" if self.use_doubles else "float"
+
+    def number_type(self):
+        return ctypes.c_double() if self.use_doubles else ctypes.c_float()
 
     def make_low(self, floor, dimension):
         return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
@@ -97,14 +102,14 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         :return: a StringTemplate with the opencl code for the planes
         """
         buffers = [
-            "__local {} local_buf_{}[{}];".format(self.number_type(), n, self.plane_size_1d)
+            "__local {} local_buf_{}[{}];".format(self.number_type_name(), n, self.plane_size_1d)
             for n in range(self.planes)
             ]
         pointers = [
-            "__local {}* plane_{} = local_buf_{};".format(self.number_type(), n, n)
+            "__local {}* plane_{} = local_buf_{};".format(self.number_type_name(), n, n)
             for n in range(self.planes)
             ]
-        pointers += ["__local {}* temp_plane;".format(self.number_type())]
+        pointers += ["__local {}* temp_plane;".format(self.number_type_name())]
         string = '\n'.join(buffers + pointers)
 
         return StringTemplate(string)
@@ -137,7 +142,10 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         self.local_work_modulus = [x / num_spaces for x in self.local_work_size]
         self.global_work_modulus = [x / num_spaces for x in self.global_work_size]
 
-        memory_declarations = self.get_local_memory_declarations()
+        if self.settings.use_local_mem:
+            memory_declarations = self.get_local_memory_declarations()
+        else:
+            memory_declarations = []
 
         # get_global_id(0)
         parts = [
@@ -301,14 +309,43 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ])
             for_body.extend(debug_show_plane(2))
+        elif self.use_local_register:
+            for plane_number in range(3):
+                encode = FunctionCall(
+                    func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
+                    args=[Constant(plane_number), SymbolRef("index_1"), SymbolRef("index_2")]
+                )
+
+                right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
+
+                # parts.append(SymbolRef("register_{}".format(plane_number), ctypes.c_float()))
+                parts.append(Assign(SymbolRef("register_{}".format(plane_number), self.number_type()), right))
+
+            body_transformer = PrimaryMeshToRegisterTransformer(self.stencil_node.name, self.plane_size, self.settings)
+            new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
+
+            encode = FunctionCall(
+                func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
+                args=[Add(SymbolRef("index_0"), Constant(2)), SymbolRef("index_1"), SymbolRef("index_2")]
+            )
+
+            right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
         else:
             new_body = node.body
 
         for_body.extend(new_body)
-        # for_body.extend(node.body)
-        for_body.extend([
-            StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
-        ])
+
+
+        if self.settings.use_local_register:
+            for_body.extend([
+                Assign(SymbolRef("register_0"), SymbolRef("register_1")),
+                Assign(SymbolRef("register_1"), SymbolRef("register_2")),
+                Assign(SymbolRef("register_2"), right),
+            ])
+
+        # if self.settings.use_local_mem or self.settings.use_local_register:
+        #     for_body.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
+        for_body.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
 
         if self.debug_kernel_indices:
             for_body.append(

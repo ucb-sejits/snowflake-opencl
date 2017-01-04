@@ -25,18 +25,21 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--test-method", type=str)
     parser.add_argument("-i", "--iterations", type=int)
     parser.add_argument("-lm", "--use-local-mem", action="store_true")
+    parser.add_argument("-lr", "--use-local-register", action="store_true")
     parser.add_argument("-po", "--use-plane-offsets", action="store_true")
     parser.add_argument("-sm", "--show-mesh", action="store_true")
+    parser.add_argument("-sgc", "--show-generated-code", action="store_true")
     parser.add_argument("-ei", "--enqueue-iterations", type=int)
     args = parser.parse_args()
 
     size = args.size
-    settings = Settings(args.use_local_mem, args.use_plane_offsets, args.enqueue_iterations)
+    settings = Settings(args.use_local_mem, args.use_plane_offsets, args.enqueue_iterations, args.use_local_register)
     test_method = args.test_method
     iterations = args.iterations
     show_mesh = args.show_mesh
-    import logging
-    # logging.basicConfig(level=20)
+    if args.show_generated_code:
+        import logging
+        logging.basicConfig(level=20)
 
     np.random.seed(0)
 

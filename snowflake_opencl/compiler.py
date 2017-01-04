@@ -214,7 +214,7 @@ class OpenCLCompiler(Compiler):
                 # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
 
                 local_work_size_1d = reduce(operator.mul, local_work_size)
-                print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
+                # print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
 
                 sub = self.parent_cls.TiledIterationSpaceExpander(
                     self.index_name,
@@ -308,9 +308,9 @@ class OpenCLCompiler(Compiler):
                             """)
 
             c_file = CFile(name="control", body=[ocl_include, control], config_target='opencl')
-            print(c_file)
-            for f in ocl_files:
-                print("{}".format(f.codegen()))
+            # print(c_file)
+            # for f in ocl_files:
+            #     print("{}".format(f.codegen()))
             return [c_file] + ocl_files
 
         def finalize(self, transform_result, program_config):
