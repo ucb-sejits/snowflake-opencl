@@ -254,17 +254,17 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                     )
                 )
 
-        def debug_show_plane(plane_number):
+        def debug_show_plane(plane_index):
             if not self.debug_plane_values:
                 return []
 
             elements = self.plane_size[0]
             return [
                 StringTemplate(
-                    'if(thread_id == 0) {{printf("{}\\plane_number", {});}}'.format(
+                    'if(thread_id == 0) {{printf("{}\\plane_index", {});}}'.format(
                        "pfwg %4d %4d  %4d   " + ",".join(["%6.4f " for _ in range(elements)]),
-                       "group_id_0, group_id_1, " + str(plane_number) + ", " +
-                       ",".join(["plane_" + str(plane_number) + "[{}]".format(
+                       "group_id_0, group_id_1, " + str(plane_index) + ", " +
+                       ",".join(["plane_" + str(plane_index) + "[{}]".format(
                            (y * elements) + x_val) for x_val in range(elements)])
                     )
                 )
@@ -323,20 +323,17 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
 
             body_transformer = PrimaryMeshToRegisterTransformer(self.stencil_node.name, self.plane_size, self.settings)
             new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
-
-            encode = FunctionCall(
-                func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
-                args=[Add(SymbolRef("index_0"), Constant(2)), SymbolRef("index_1"), SymbolRef("index_2")]
-            )
-
-            right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
         else:
             new_body = node.body
 
         for_body.extend(new_body)
 
-
         if self.settings.use_local_register:
+            encode = FunctionCall(
+                func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
+                args=[Add(SymbolRef("index_0"), Constant(2)), SymbolRef("index_1"), SymbolRef("index_2")]
+            )
+            right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
             for_body.extend([
                 Assign(SymbolRef("register_0"), SymbolRef("register_1")),
                 Assign(SymbolRef("register_1"), SymbolRef("register_2")),

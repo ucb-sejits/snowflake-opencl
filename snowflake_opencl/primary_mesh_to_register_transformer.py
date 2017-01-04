@@ -1,8 +1,7 @@
 import ast
-import ctypes
 import re
 
-from ctree.c.nodes import Constant, SymbolRef, FunctionCall, BinaryOp, ArrayRef, Op, Assign
+from ctree.c.nodes import Constant, SymbolRef, FunctionCall, BinaryOp, Op
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
