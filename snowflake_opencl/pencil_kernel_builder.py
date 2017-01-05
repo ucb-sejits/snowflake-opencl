@@ -362,18 +362,18 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 )
             )
 
-        # if self.settings.unroll_kernel:
-        #     for for_index in range(1, self.global_work_size[0]+1):
-        #         parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
-        #         parts.extend(for_body)
-        # else:
-        #     pencil_block = For(
-        #         init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
-        #         test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
-        #         incr=PostInc(SymbolRef("index_0")),
-        #         body=for_body
-        #     )
-        #     parts.append(pencil_block)
+        if self.settings.unroll_kernel:
+            for for_index in range(1, self.global_work_size[0]+1):
+                parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
+                parts.extend(for_body)
+        else:
+            pencil_block = For(
+                init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
+                test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+                incr=PostInc(SymbolRef("index_0")),
+                body=for_body
+            )
+            parts.append(pencil_block)
 
         return MultiNode(parts)
 
