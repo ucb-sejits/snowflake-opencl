@@ -4,6 +4,8 @@ import re
 
 import pycl as cl
 import ast
+
+import time
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, Op, \
@@ -58,7 +60,12 @@ class PencilCompiler(Compiler):
             queue = cl.clCreateCommandQueue(self.context)
             true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
             # this returns None instead of an int...
-            return self._c_function(*true_args)
+
+            start_time = time.time()
+            result = self._c_function(*true_args)
+            end_time = time.time()
+            print("execute pencil done in {:10.5f} seconds".format((end_time - start_time)))
+            return result
 
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):

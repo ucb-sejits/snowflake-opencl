@@ -28,15 +28,23 @@ if __name__ == '__main__':
     parser.add_argument("-lr", "--use-local-register", action="store_true")
     parser.add_argument("-po", "--use-plane-offsets", action="store_true")
     parser.add_argument("-sm", "--show-mesh", action="store_true")
+    parser.add_argument("-uk", "--unroll_kernel", action="store_true")
     parser.add_argument("-sgc", "--show-generated-code", action="store_true")
+    parser.add_argument("-urw", "--use-random-weights", action="store_true")
     parser.add_argument("-ei", "--enqueue-iterations", type=int)
     args = parser.parse_args()
 
     size = args.size
-    settings = Settings(args.use_local_mem, args.use_plane_offsets, args.enqueue_iterations, args.use_local_register)
+    settings = Settings(
+        args.use_local_mem, args.use_plane_offsets,
+        args.enqueue_iterations, args.use_local_register,
+        args.use_random_weights
+    )
     test_method = args.test_method
     iterations = args.iterations
     show_mesh = args.show_mesh
+    use_random_weights = args.use_random_weights
+
     if args.show_generated_code:
         import logging
         logging.basicConfig(level=20)
@@ -62,25 +70,30 @@ if __name__ == '__main__':
     out_buf = NDBuffer(queue, buffer_out)
     out_buf_pencil = NDBuffer(queue, buffer_out_pencil)
 
+    weight_array = [
+        [
+            [0, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+        ],
+        [
+            [0, 1, 0],
+            [1, -6, 1],
+            [0, 1, 0],
+        ],
+        [
+            [0, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+        ],
+    ]
+
+    if use_random_weights:
+        weight_array = np.random.random((3, 3, 3))
+
     sc = StencilComponent(
         'mesh',
-        WeightArray([
-            [
-                [0, 0, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ],
-            [
-                [0, 1, 0],
-                [1, -6, 1],
-                [0, 1, 0],
-            ],
-            [
-                [0, 0, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ],
-        ])
+        WeightArray(weight_array)
     )
 
     jacobi_stencil = Stencil(sc, 'out', ((1, size-1, 1),) * 3, primary_mesh='out')

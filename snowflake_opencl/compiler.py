@@ -2,6 +2,7 @@ import ctypes
 import operator
 
 import pycl as cl
+import time
 from ctree.c.macros import NULL
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
     Assign, Array, FunctionCall, Ref, Return, CFile, For, LtE, PostInc, Lt
@@ -114,8 +115,11 @@ class OpenCLCompiler(Compiler):
             queue = cl.clCreateCommandQueue(self.context)
             true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
             # this returns None instead of an int...
-            return self._c_function(*true_args)
-
+            start_time = time.time()
+            result =  self._c_function(*true_args)
+            end_time = time.time()
+            print("execute naive done in {:10.5f} seconds".format((end_time - start_time)))
+            return result
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',
