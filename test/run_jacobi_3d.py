@@ -116,7 +116,7 @@ if __name__ == '__main__':
         ]
     elif args.set_operator == "7pt":
         ghost_size = 1
-        weight_array = [
+        weight_array = np.array([
             [
                 [0, 0, 0],
                 [0, rr(), 0],
@@ -132,7 +132,7 @@ if __name__ == '__main__':
                 [0, rr(), 0],
                 [0, 0, 0],
             ],
-        ]
+        ])
     elif args.set_operator == "13pt":
         ghost_size = 2
         weight_array = [
@@ -180,8 +180,6 @@ if __name__ == '__main__':
         weight_array = np.random.random((5, 5, 5))
     else:
         parser.usage()
-
-    print("weigth array shape {}\n{}".format(weight_array.shape, weight_array))
 
     sc = StencilComponent(
         'mesh',
