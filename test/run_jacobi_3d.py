@@ -31,7 +31,8 @@ if __name__ == '__main__':
     parser.add_argument("-lr", "--use-local-register", action="store_true")
     parser.add_argument("-po", "--use-plane-offsets", action="store_true")
     parser.add_argument("-sm", "--show-mesh", action="store_true")
-    parser.add_argument("-uk", "--unroll_kernel", action="store_true")
+    parser.add_argument("-uk", "--unroll-kernel", action="store_true")
+    parser.add_argument("-ff", "--force-float", action="store_true")
     parser.add_argument("-sgc", "--show-generated-code", action="store_true")
     parser.add_argument("-sop", "--set-operator", type=str,
                         help='one of 7pt, 13pt, 3x3x3, 5x5x5')
@@ -60,6 +61,7 @@ if __name__ == '__main__':
     iterations = args.iterations
     show_mesh = args.show_mesh
     run_no_pencil = args.run_no_pencil
+    force_float = args.force_float
 
     if args.show_generated_code:
         import logging
@@ -67,8 +69,15 @@ if __name__ == '__main__':
 
     np.random.seed(0)
 
-    buffer_in = np.random.random((size, size, size)).astype(np.float32)
-    # buffer_in = np.ones((size, size, size)).astype(np.float32)
+    device = cl.clGetDeviceIDs()[-1]
+    ctx = cl.clCreateContext(devices=[device])
+
+    use_type = np.float32
+    if "cl_khr_fp64" in device.extensions and not force_float:
+        use_type = np.double
+
+    buffer_in = np.random.random((size, size, size)).astype(use_type)
+    # buffer_in = np.ones((size, size, size)).astype(use_type)
     # for j, x in enumerate(buffer_in):
     #     for i, y in enumerate(x):
     #         for k, _ in enumerate(y):
@@ -76,9 +85,6 @@ if __name__ == '__main__':
 
     buffer_out = np.zeros_like(buffer_in)
     buffer_out_pencil = np.zeros_like(buffer_in)
-
-    device = cl.clGetDeviceIDs()[-1]
-    ctx = cl.clCreateContext(devices=[device])
 
     queue = cl.clCreateCommandQueue(ctx)
 
@@ -174,6 +180,8 @@ if __name__ == '__main__':
         weight_array = np.random.random((5, 5, 5))
     else:
         parser.usage()
+
+    print("weigth array shape {}\n{}".format(weight_array.shape, weight_array))
 
     sc = StencilComponent(
         'mesh',

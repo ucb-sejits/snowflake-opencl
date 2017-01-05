@@ -301,7 +301,8 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             last_plane_number = self.ghost_size[0]*2
             for_body.append(Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")))
             for plane_number in range(last_plane_number):
-                for_body.append(Assign(SymbolRef("plane_{}".format(plane_number)), SymbolRef("plane_{}".format(plane_number+1))))
+                for_body.append(
+                    Assign(SymbolRef("plane_{}".format(plane_number)), SymbolRef("plane_{}".format(plane_number+1))))
             for_body.append(Assign(SymbolRef("plane_{}".format(last_plane_number)), SymbolRef("temp_plane")))
 
             for_body.extend([
@@ -361,18 +362,18 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 )
             )
 
-        if self.settings.unroll_kernel:
-            for for_index in range(1, self.global_work_size[0]+1):
-                parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
-                parts.extend(for_body)
-        else:
-            pencil_block = For(
-                init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
-                test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
-                incr=PostInc(SymbolRef("index_0")),
-                body=for_body
-            )
-            parts.append(pencil_block)
+        # if self.settings.unroll_kernel:
+        #     for for_index in range(1, self.global_work_size[0]+1):
+        #         parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
+        #         parts.extend(for_body)
+        # else:
+        #     pencil_block = For(
+        #         init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
+        #         test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+        #         incr=PostInc(SymbolRef("index_0")),
+        #         body=for_body
+        #     )
+        #     parts.append(pencil_block)
 
         return MultiNode(parts)
 
