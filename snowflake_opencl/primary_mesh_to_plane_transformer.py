@@ -9,10 +9,11 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 # noinspection PyPep8Naming
 class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
-    def __init__(self, mesh_name, plane_size, settings):
+    def __init__(self, mesh_name, plane_size, ghost_size, settings):
         self.mesh_name = mesh_name
         self.plane_size = plane_size
         self.debug_plane_transformer = False
+        self.ghost_size = ghost_size
         self.optimize_plane_offsets = settings.use_plane_offsets
         self.stage = 0
         self.neighbor_id = 0
@@ -49,7 +50,7 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
 
                                         if not self.optimize_plane_offsets:
                                             new_node = ArrayRef(
-                                                SymbolRef("plane_{}".format(1+add.right.value)),
+                                                SymbolRef("plane_{}".format(self.ghost_size+add.right.value)),
                                                 FunctionCall(
                                                     func=SymbolRef("encode{}_{}".format(
                                                         self.plane_size[0], self.plane_size[1])),
@@ -69,7 +70,7 @@ class PrimaryMeshToPlaneTransformer(ast.NodeTransformer):
                                                 )
                                             self.plane_offsets.append(Assign(neighbor_symbol_init, plane_offset))
                                             new_node = ArrayRef(
-                                                SymbolRef("plane_{}".format(1+add.right.value)),
+                                                SymbolRef("plane_{}".format(self.ghost_size+add.right.value)),
                                                 neighbor_symbol
                                             )
                                             return new_node

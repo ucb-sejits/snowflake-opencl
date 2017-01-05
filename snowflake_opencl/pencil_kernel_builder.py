@@ -287,31 +287,29 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             parts.append(StringTemplate("    //"))
             parts.append(StringTemplate("    // Fill the first local memory planes"))
             parts.append(StringTemplate("    //"))
-            parts.extend(self.fill_plane("plane_1", Constant(0)))
-            parts.extend(debug_show_plane(1))
-            parts.extend(self.fill_plane("plane_2", Constant(1)))
-            parts.extend(debug_show_plane(2))
-            parts.extend([
-                StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
-            ])
+            for plane_number in range(1, (self.ghost_size[0] * 2) + 1):
+                parts.extend(self.fill_plane("plane_{}".format(plane_number), Constant(plane_number - 1)))
+                parts.extend(debug_show_plane(plane_number))
+                parts.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
 
-            body_transformer = PrimaryMeshToPlaneTransformer(self.stencil_node.name, self.plane_size, self.settings)
+            body_transformer = PrimaryMeshToPlaneTransformer(
+                self.stencil_node.name, self.plane_size, self.ghost_size[0], self.settings)
             new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
 
             parts.extend(body_transformer.plane_offsets)
 
-            for_body.extend([
-                Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")),
-                Assign(SymbolRef("plane_0"), SymbolRef("plane_1")),
-                Assign(SymbolRef("plane_1"), SymbolRef("plane_2")),
-                Assign(SymbolRef("plane_2"), SymbolRef("temp_plane")),
-            ])
+            last_plane_number = self.ghost_size[0]*2
+            for_body.append(Assign(SymbolRef("temp_plane"), SymbolRef("plane_0")))
+            for plane_number in range(last_plane_number):
+                for_body.append(Assign(SymbolRef("plane_{}".format(plane_number)), SymbolRef("plane_{}".format(plane_number+1))))
+            for_body.append(Assign(SymbolRef("plane_{}".format(last_plane_number)), SymbolRef("temp_plane")))
 
             for_body.extend([
-                self.fill_plane("plane_2", Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
+                self.fill_plane(
+                    "plane_{}".format(last_plane_number), Add(SymbolRef("index_0"), Constant(self.ghost_size[0]))),
                 StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''),
             ])
-            for_body.extend(debug_show_plane(2))
+            for_body.extend(debug_show_plane(last_plane_number))
         elif self.use_local_register:
             for plane_number in range(3):
                 encode = FunctionCall(
