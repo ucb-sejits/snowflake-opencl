@@ -118,8 +118,9 @@ class OpenCLCompiler(Compiler):
             start_time = time.time()
             result =  self._c_function(*true_args)
             end_time = time.time()
-            print("execute naive done in {:10.5f} seconds".format((end_time - start_time)))
+            print("{:10.5f} seconds, no pencil".format((end_time - start_time)))
             return result
+
     # noinspection PyAbstractClass
     class LazySpecializedKernel(CCompiler.LazySpecializedKernel):
         def __init__(self, py_ast=None, original=None, names=None, target_names=('out',), index_name='index',

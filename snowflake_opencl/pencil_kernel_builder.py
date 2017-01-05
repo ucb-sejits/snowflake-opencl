@@ -89,8 +89,9 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             if lws_2 * 2 <= self.global_work_size[1]:
                 lws_2 *= 2
 
-        lws_1 = 8
-        lws_2 = 32
+        if self.settings.force_local_work_size:
+            lws_1, lws_2 = self.settings.force_local_work_size
+
         self.plane_size = (lws_1 + (self.ghost_size[0] * 2), lws_2 + (self.ghost_size[1] * 2))
         self.plane_size_1d = reduce(operator.mul, self.plane_size)
 
@@ -363,6 +364,10 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             )
 
         if self.settings.unroll_kernel:
+            for for_index in range(1, self.global_work_size[0]+1):
+                parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
+                parts.extend(for_body)
+        else:
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
                 test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
@@ -370,10 +375,6 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 body=for_body
             )
             parts.append(pencil_block)
-        else:
-            for for_index in range(1, self.global_work_size[0]+1):
-                parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
-                parts.extend(for_body)
 
         return MultiNode(parts)
 

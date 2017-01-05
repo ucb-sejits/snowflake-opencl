@@ -42,13 +42,14 @@ class PencilCompiler(Compiler):
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size, kernels):
+        def __init__(self, context, global_work_size, local_work_size, kernels, label="pencil"):
             self.context = context
             self.gws = global_work_size
             self.lws = local_work_size
             self.kernels = kernels
             self._c_function = None
             self.entry_point_name = None
+            self.label = label
             super(PencilCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
@@ -64,7 +65,7 @@ class PencilCompiler(Compiler):
             start_time = time.time()
             result = self._c_function(*true_args)
             end_time = time.time()
-            print("execute pencil done in {:10.5f} seconds".format((end_time - start_time)))
+            print("{:10.5f} {}".format((end_time - start_time), self.label))
             return result
 
     # noinspection PyAbstractClass
@@ -270,7 +271,7 @@ class PencilCompiler(Compiler):
             for i, f in enumerate(transform_result[1:]):
                 kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" % i])
             fn = PencilCompiler.ConcreteSpecializedKernel(
-                self.context, self.global_work_size, self.local_work_size, kernels)
+                self.context, self.global_work_size, self.local_work_size, kernels, self.settings.label)
             func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
                         cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
                         for arg in program_config.args_subconfig.values()
