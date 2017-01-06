@@ -2,7 +2,7 @@ import ctypes
 import operator
 
 from ctree.c.nodes import Constant, SymbolRef, Assign, FunctionCall, \
-    ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, LtE
+    ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc
 from ctree.c.nodes import MultiNode
 from ctree.templates.nodes import StringTemplate
 
@@ -312,7 +312,7 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             ])
             for_body.extend(debug_show_plane(last_plane_number))
         elif self.use_local_register:
-            for plane_number in range(3):
+            for plane_number in range((self.ghost_size[0] * 2) + 1):
                 encode = FunctionCall(
                     func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
                     args=[Constant(plane_number), SymbolRef("index_1"), SymbolRef("index_2")]
@@ -323,7 +323,8 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
                 # parts.append(SymbolRef("register_{}".format(plane_number), ctypes.c_float()))
                 parts.append(Assign(SymbolRef("register_{}".format(plane_number), self.number_type()), right))
 
-            body_transformer = PrimaryMeshToRegisterTransformer(self.stencil_node.name, self.plane_size, self.settings)
+            body_transformer = PrimaryMeshToRegisterTransformer(
+                self.stencil_node.name, self.plane_size, self.ghost_size[0], self.settings)
             new_body = [body_transformer.execute(sub_node) for sub_node in node.body]
         else:
             new_body = node.body
@@ -333,18 +334,31 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         if self.settings.use_local_register:
             encode = FunctionCall(
                 func=SymbolRef("encode" + "_".join([str(x) for x in self.reference_array_shape])),
-                args=[Add(SymbolRef("index_0"), Constant(2)), SymbolRef("index_1"), SymbolRef("index_2")]
+                args=[
+                    Add(SymbolRef("index_0"), Constant(self.ghost_size[0]+1)),
+                    SymbolRef("index_1"),
+                    SymbolRef("index_2")
+                ]
             )
             right = ArrayRef(SymbolRef(name=self.stencil.op_tree.name), encode)
-            for_body.extend([
-                Assign(SymbolRef("register_0"), SymbolRef("register_1")),
-                Assign(SymbolRef("register_1"), SymbolRef("register_2")),
-                Assign(SymbolRef("register_2"), right),
-            ])
+            for register_number in range(self.ghost_size[0] * 2):
+                for_body.append(
+                    Assign(
+                        SymbolRef("register_{}".format(register_number)),
+                        SymbolRef("register_{}".format(register_number+1))
+                    ),
+                )
+            for_body.append(Assign(SymbolRef("register_{}".format(self.ghost_size[0]*2)), right))
+            # for_body.extend([
+            #     Assign(SymbolRef("register_0"), SymbolRef("register_1")),
+            #     Assign(SymbolRef("register_1"), SymbolRef("register_2")),
+            #     Assign(SymbolRef("register_2"), right),
+            # ])
 
         # if self.settings.use_local_mem or self.settings.use_local_register:
         #     for_body.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
-        for_body.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
+        if not self.settings.remove_for_body_fence:
+            for_body.append(StringTemplate('''barrier(CLK_LOCAL_MEM_FENCE);'''))
 
         if self.debug_kernel_indices:
             for_body.append(
@@ -363,13 +377,13 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
             )
 
         if self.settings.unroll_kernel:
-            for for_index in range(1, self.global_work_size[0]+1):
+            for for_index in range(1, self.global_work_size[0] + self.ghost_size[0]):
                 parts.append(Assign(SymbolRef("index_0"), Constant(for_index)))
                 parts.extend(for_body)
         else:
             pencil_block = For(
                 init=Assign(SymbolRef("index_0"), Constant(self.ghost_size[0])),
-                test=LtE(SymbolRef("index_0"), Constant(self.global_work_size[0])),
+                test=Lt(SymbolRef("index_0"), Constant(self.global_work_size[0] + self.ghost_size[0])),
                 incr=PostInc(SymbolRef("index_0")),
                 body=for_body
             )

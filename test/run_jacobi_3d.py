@@ -3,11 +3,10 @@ from __future__ import print_function
 import argparse
 import random
 
+import math
 import numpy as np
 import pycl as cl
 import time
-
-import sys
 
 from snowflake_opencl.pencil_compiler import PencilCompiler
 from snowflake_opencl.util import print_mesh
@@ -39,9 +38,8 @@ if __name__ == '__main__':
     parser.add_argument("-flws", "--force-local-work-size", type=str)
     parser.add_argument("-tl", "--timer-label", type=str, default="opencl pencil test")
     parser.add_argument("-ei", "--enqueue-iterations", type=int)
+    parser.add_argument("-rfbf", "--remove-for-body-fence", action="store_true")
     args = parser.parse_args()
-
-    size = args.size
 
     force_local_work_size = None
     if args.force_local_work_size:
@@ -54,6 +52,7 @@ if __name__ == '__main__':
         use_local_register=args.use_local_register,
         unroll_kernel=args.unroll_kernel,
         force_local_work_size=force_local_work_size,
+        remove_for_body_fence=args.remove_for_body_fence,
         label=args.timer_label,
     )
 
@@ -76,25 +75,11 @@ if __name__ == '__main__':
     if "cl_khr_fp64" in device.extensions and not force_float:
         use_type = np.double
 
-    buffer_in = np.random.random((size, size, size)).astype(use_type)
-    # buffer_in = np.ones((size, size, size)).astype(use_type)
-    # for j, x in enumerate(buffer_in):
-    #     for i, y in enumerate(x):
-    #         for k, _ in enumerate(y):
-    #             buffer_in[i, j, k] = 1.0  # float(i * j * k)
-
-    buffer_out = np.zeros_like(buffer_in)
-    buffer_out_pencil = np.zeros_like(buffer_in)
-
-    queue = cl.clCreateCommandQueue(ctx)
-
-    in_buf = NDBuffer(queue, buffer_in)
-    out_buf = NDBuffer(queue, buffer_out)
-    out_buf_pencil = NDBuffer(queue, buffer_out_pencil)
-
     def rr():
         return random.random()
 
+    ghost_size = 1
+    weight_array = None
     if not args.set_operator:
         ghost_size = 1
         weight_array = [
@@ -179,7 +164,33 @@ if __name__ == '__main__':
         ghost_size = 2
         weight_array = np.random.random((5, 5, 5))
     else:
-        parser.usage()
+        print(parser.usage)
+        exit(1)
+
+    power = math.log(args.size, 2)
+    if power - int(power) > 0:
+        print("mesh size {} must be a power of 2".format(args.size))
+        print(parser.usage)
+        exit(1)
+
+    size = args.size + (2 * ghost_size)
+
+    buffer_in = np.random.random((size, size, size)).astype(use_type)
+
+    # buffer_in = np.ones((size, size, size)).astype(use_type)
+    # for j, x in enumerate(buffer_in):
+    #     for i, y in enumerate(x):
+    #         for k, _ in enumerate(y):
+    #             buffer_in[i, j, k] = 1.0  # float(i * j * k)
+
+    buffer_out = np.zeros_like(buffer_in)
+    buffer_out_pencil = np.zeros_like(buffer_in)
+
+    queue = cl.clCreateCommandQueue(ctx)
+
+    in_buf = NDBuffer(queue, buffer_in)
+    out_buf = NDBuffer(queue, buffer_out)
+    out_buf_pencil = NDBuffer(queue, buffer_out_pencil)
 
     sc = StencilComponent(
         'mesh',
@@ -195,6 +206,7 @@ if __name__ == '__main__':
 
         start_time = time.time()
 
+        out_evt = None
         for _ in range(iterations):
             jacobi_operator(out_buf, in_buf)
             buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
@@ -214,6 +226,7 @@ if __name__ == '__main__':
 
     start_time_pencil = time.time()
 
+    out_evt = None
     for _ in range(iterations):
         jacobi_operator_pencil(out_buf_pencil, in_buf)
         buffer_out_pencil, out_evt = cl.buffer_to_ndarray(queue, out_buf_pencil.buffer, buffer_out_pencil)
@@ -233,9 +246,11 @@ if __name__ == '__main__':
             np.testing.assert_array_almost_equal(buffer_out, buffer_out_pencil, decimal=4)
         elif test_method == "python":
             differences = 0
+            values_compared = 0
             for x in range(size):
                 for y in range(size):
                     for z in range(size):
+                        values_compared += 1
                         if out_buf.ary[x, y, z] - out_buf_pencil.ary[x, y, z] > 0.0001:
                             differences += 1
                             computed = buffer_in[x+1, y, z] + buffer_in[x-1, y, z] + \
@@ -251,7 +266,7 @@ if __name__ == '__main__':
 
                             little_mesh = buffer_in[x-1:x+2, y-1:y+2, z-1:z+2]
                             print_mesh(little_mesh)
-            print("Total differences: {}".format(differences))
+            print("Total differences: {} out of {}".format(differences, values_compared))
 
     # the following times include compilation and are confusing
     # print("compiler        done in {:10.5f} seconds".format((end_time - start_time) / iterations))

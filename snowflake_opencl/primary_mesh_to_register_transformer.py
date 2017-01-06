@@ -8,10 +8,11 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 # noinspection PyPep8Naming
 class PrimaryMeshToRegisterTransformer(ast.NodeTransformer):
-    def __init__(self, mesh_name, plane_size, settings):
+    def __init__(self, mesh_name, plane_size, ghost_size, settings):
         self.mesh_name = mesh_name
         self.plane_size = plane_size
         self.debug_plane_transformer = False
+        self.ghost_size = ghost_size
         self.optimize_plane_offsets = settings.use_plane_offsets
         self.stage = 0
         self.neighbor_id = 0
@@ -55,12 +56,7 @@ class PrimaryMeshToRegisterTransformer(ast.NodeTransformer):
                                             const_2 = add_2.right.value
 
                                             if const_1 == 0 and const_2 == 0:
-                                                if const_0 == -1:
-                                                    return SymbolRef("register_0")
-                                                elif const_0 == 0:
-                                                    return SymbolRef("register_1")
-                                                elif const_0 == 1:
-                                                    return SymbolRef("register_2")
+                                                return SymbolRef("register_{}".format(self.ghost_size+const_0))
 
         return BinaryOp(
             left=self.visit(node.left),
