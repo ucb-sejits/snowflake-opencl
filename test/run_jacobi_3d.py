@@ -1,5 +1,7 @@
 from __future__ import print_function
 
+import sys
+
 import argparse
 import random
 
@@ -21,6 +23,8 @@ __author__ = 'Chick Markley chick@berkeley.edu U.C. Berkeley'
 
 
 if __name__ == '__main__':
+    sys.setrecursionlimit(1500)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("size", type=int, help="mesh edge size")
     parser.add_argument("-t", "--test-method", type=str, default="none")
