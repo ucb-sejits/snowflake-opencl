@@ -19,6 +19,7 @@ from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
 import math
 
+from snowflake_opencl.kernel_builder import KernelBuilder
 from snowflake_opencl.nd_buffer import NDBuffer
 from snowflake_opencl.ocl_tiler import OclTiler
 
@@ -36,74 +37,15 @@ class OpenCLCompiler(Compiler):
     BlockConverter = CCompiler.BlockConverter
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
-    class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
-        def __init__(self, index_name, reference_array_shape, tiler):
-            self.packed_shape = tiler.packed_iteration_shape
-            self.local_work_size = tiler.local_work_size
-            super(OpenCLCompiler.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
-
-        def make_low(self, floor, dimension):
-            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
-
-        def make_high(self, ceiling, dimension):
-            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
-
-        def visit_IterationSpace(self, node):
-            node = self.generic_visit(node)
-
-            total_work_dims, total_strides, total_lows = [], [], []
-            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.local_work_size)
-
-            for space in node.space.spaces:
-                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
-                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
-                strides = space.stride
-                work_dims = []
-
-                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
-                    work_dims.append((high - low + stride - 1) / stride)
-
-                total_work_dims.append(tuple(work_dims))
-                total_strides.append(strides)
-                total_lows.append(lows)
-
-            # get_global_id(0)
-            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
-                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
-            # initialize index variables
-            parts.extend(
-                SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
-                for dim in range(len(self.reference_array_shape)))
-
-            # calculate each index inline
-            for space in range(len(node.space.spaces)):
-                # indices = self.build_index_variables(SymbolRef("global_id"),
-                #                                    shape=Vector(highs) - Vector(lows),
-                #                                    multipliers=total_strides[space],
-                #                                    offsets=total_lows[space])
-                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
-                                                                       iteration_space_index=space)
-                for dim in range(len(self.reference_array_shape)):
-                    parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
-
-                # for dim in range(tile.dim)
-                new_body = [
-                    tiler.add_guards_if_necessary(statement)
-                    for statement in node.body
-                    ]
-                node.body = new_body
-                parts.extend(node.body)
-
-            return MultiNode(parts)
-
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size, kernels):
+        def __init__(self, context, global_work_size, local_work_size, kernels, label="pencil"):
             self.context = context
             self.gws = global_work_size
             self.lws = local_work_size
             self.kernels = kernels
             self._c_function = None
             self.entry_point_name = None
+            self.label = label
             super(OpenCLCompiler.ConcreteSpecializedKernel, self).__init__()
 
         def finalize(self, entry_point_name, project_node, entry_point_typesig):
@@ -115,10 +57,11 @@ class OpenCLCompiler(Compiler):
             queue = cl.clCreateCommandQueue(self.context)
             true_args = [queue] + self.kernels + [arg.buffer if isinstance(arg, NDBuffer) else arg for arg in args]
             # this returns None instead of an int...
+
             start_time = time.time()
-            result =  self._c_function(*true_args)
+            result = self._c_function(*true_args)
             end_time = time.time()
-            print("{:10.5f} seconds, no pencil".format((end_time - start_time)))
+            print("{:10.5f} {}".format((end_time - start_time), self.label))
             return result
 
     # noinspection PyAbstractClass
@@ -206,6 +149,21 @@ class OpenCLCompiler(Compiler):
             #
             for kernel_number, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
+
+                kernel_builder = KernelBuilder(
+                    self.index_name,
+                    subconfig[target].shape,
+                    stencil_node,
+                    self.device,
+                    self.settings
+                )
+                #
+                kernel_body = kernel_builder.visit(i_space)
+                # kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
+
+                for new_encode_func in kernel_builder.get_additional_encode_funcs():
+                    if new_encode_func not in encode_funcs:
+                        encode_funcs.append(new_encode_func)
 
                 shape = subconfig[target].shape
 

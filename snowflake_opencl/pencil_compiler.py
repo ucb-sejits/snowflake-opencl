@@ -1,16 +1,11 @@
 import ctypes
-import operator
-import re
+import time
 
 import pycl as cl
-import ast
-
-import time
 from ctree.c.macros import NULL
+from ctree.c.nodes import BitOrAssign
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, BinaryOp, ArrayRef, Add, Mod, Mul, Div, Lt, If, For, PostInc, Op, \
-    LtE
-from ctree.c.nodes import MultiNode, BitOrAssign
+    Assign, Array, FunctionCall, Ref, Return, CFile, Lt, For, PostInc
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
 from ctree.ocl.nodes import OclFile
@@ -21,11 +16,9 @@ from ctree.types import get_ctype
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-import math
 
 from snowflake_opencl.nd_buffer import NDBuffer
 from snowflake_opencl.pencil_kernel_builder import PencilKernelBuilder
-from snowflake_opencl.primary_mesh_to_plane_transformer import PrimaryMeshToPlaneTransformer
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
@@ -162,12 +155,9 @@ class PencilCompiler(Compiler):
                 kernel_body = kernel_builder.visit(i_space)
                 kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
 
-                local_reference_shape = kernel_builder.plane_size
-                new_encode_func = generate_encode_macro(
-                    'encode' + CCompiler._shape_to_str(local_reference_shape), local_reference_shape
-                )
-                if new_encode_func not in encode_funcs:
-                    encode_funcs.append(new_encode_func)  # local
+                for new_encode_func in kernel_builder.get_additional_encode_funcs():
+                    if new_encode_func not in encode_funcs:
+                        encode_funcs.append(new_encode_func)
 
                 # Uncomment the following line to put some printf showing index values at runtime
                 # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape))

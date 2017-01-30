@@ -7,17 +7,17 @@ from ctree.c.nodes import MultiNode
 from ctree.templates.nodes import StringTemplate
 
 # noinspection PyProtectedMember
-from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import CCompiler
 import math
 
+from snowflake_opencl.ocl_tiler import OclTiler
 from snowflake_opencl.primary_mesh_to_plane_transformer import PrimaryMeshToPlaneTransformer
 from snowflake_opencl.primary_mesh_to_register_transformer import PrimaryMeshToRegisterTransformer
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 
-class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
+class KernelBuilder(CCompiler.IterationSpaceExpander):
     def __init__(self, index_name, reference_array_shape, stencil, device, settings):
         self.stencil = stencil
         self.stencil_node = stencil.op_tree
@@ -46,7 +46,67 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         self.debug_kernel_indices = False
         self.debug_kernel_launch = False
 
-        super(PencilKernelBuilder, self).__init__(index_name, reference_array_shape)
+        super(KernelBuilder, self).__init__(index_name, reference_array_shape)
+
+    class TiledIterationSpaceExpander(CCompiler.IterationSpaceExpander):
+        def __init__(self, index_name, reference_array_shape, tiler):
+            self.packed_shape = tiler.packed_iteration_shape
+            self.local_work_size = tiler.local_work_size
+            super(KernelBuilder.TiledIterationSpaceExpander, self).__init__(index_name, reference_array_shape)
+
+        def make_low(self, floor, dimension):
+            return floor if floor >= 0 else self.reference_array_shape[dimension] + floor
+
+        def make_high(self, ceiling, dimension):
+            return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
+
+        def visit_IterationSpace(self, node):
+            node = self.generic_visit(node)
+
+            total_work_dims, total_strides, total_lows = [], [], []
+            tiler = OclTiler(self.reference_array_shape, node, force_local_work_size=self.local_work_size)
+
+            for space in node.space.spaces:
+                lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
+                highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
+                strides = space.stride
+                work_dims = []
+
+                for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
+                    work_dims.append((high - low + stride - 1) / stride)
+
+                total_work_dims.append(tuple(work_dims))
+                total_strides.append(strides)
+                total_lows.append(lows)
+
+            # get_global_id(0)
+            parts = [Assign(SymbolRef("global_id", ctypes.c_ulong()),
+                            FunctionCall(SymbolRef("get_global_id"), [Constant(0)]))]
+            # initialize index variables
+            parts.extend(
+                SymbolRef("{}_{}".format(self.index_name, dim), ctypes.c_ulong())
+                for dim in range(len(self.reference_array_shape)))
+
+            # calculate each index inline
+            for space in range(len(node.space.spaces)):
+                # indices = self.build_index_variables(SymbolRef("global_id"),
+                #                                    shape=Vector(highs) - Vector(lows),
+                #                                    multipliers=total_strides[space],
+                #                                    offsets=total_lows[space])
+                indices = tiler.global_index_to_coordinate_expressions(SymbolRef("global_id"),
+                                                                       iteration_space_index=space)
+                for dim in range(len(self.reference_array_shape)):
+                    parts.append(Assign(SymbolRef("{}_{}".format(self.index_name, dim)), indices[dim]))
+
+                # for dim in range(tile.dim)
+                new_body = [
+                    tiler.add_guards_if_necessary(statement)
+                    for statement in node.body
+                    ]
+                node.body = new_body
+                parts.extend(node.body)
+
+            return MultiNode(parts)
 
     def number_size(self):
         return 8 if self.use_doubles else 4
@@ -64,11 +124,8 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
 
     def get_additional_encode_funcs(self):
-        local_reference_shape = self.plane_size
-        new_encode_func = generate_encode_macro(
-            'encode' + CCompiler._shape_to_str(local_reference_shape), local_reference_shape
-        )
-        return [new_encode_func]
+        return []
+
 
     def compute_plane_info(self):
         """
