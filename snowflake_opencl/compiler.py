@@ -1,12 +1,11 @@
 import ctypes
-import operator
+import time
 
 import pycl as cl
-import time
 from ctree.c.macros import NULL
+from ctree.c.nodes import BitOrAssign
 from ctree.c.nodes import Constant, SymbolRef, ArrayDef, FunctionDecl, \
-    Assign, Array, FunctionCall, Ref, Return, CFile, For, LtE, PostInc, Lt
-from ctree.c.nodes import MultiNode, BitOrAssign
+    Assign, Array, FunctionCall, Ref, Return, CFile, Lt, For, PostInc
 from ctree.jit import ConcreteSpecializedFunction
 from ctree.nodes import Project
 from ctree.ocl.nodes import OclFile
@@ -17,11 +16,9 @@ from ctree.types import get_ctype
 from snowflake._compiler import find_names
 from snowflake.compiler_utils import generate_encode_macro
 from snowflake.stencil_compiler import Compiler, CCompiler
-import math
 
-from snowflake_opencl.kernel_builder import KernelBuilder
 from snowflake_opencl.nd_buffer import NDBuffer
-from snowflake_opencl.ocl_tiler import OclTiler
+from snowflake_opencl.kernel_builder import KernelBuilder
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
@@ -38,7 +35,7 @@ class OpenCLCompiler(Compiler):
     IndexOpToEncode = CCompiler.IndexOpToEncode
 
     class ConcreteSpecializedKernel(ConcreteSpecializedFunction):
-        def __init__(self, context, global_work_size, local_work_size, kernels, label="pencil"):
+        def __init__(self, context, global_work_size, local_work_size, kernels, label=None):
             self.context = context
             self.gws = global_work_size
             self.lws = local_work_size
@@ -61,7 +58,8 @@ class OpenCLCompiler(Compiler):
             start_time = time.time()
             result = self._c_function(*true_args)
             end_time = time.time()
-            print("{:10.5f} {}".format((end_time - start_time), self.label))
+            if self.label:
+                print("{:10.5f} {}".format((end_time - start_time), self.label))
             return result
 
     # noinspection PyAbstractClass
@@ -109,9 +107,6 @@ class OpenCLCompiler(Compiler):
             #                        "(" + ", ".join("{}".format(var) for var in index_variables) + ")]"
 
             return StringTemplate('printf("{}\\n", {});'.format(format_string, argument_string))
-
-        def build_regular_kernel(self):
-            None
 
         # noinspection PyProtectedMember
         def transform(self, tree, program_config):
@@ -190,7 +185,7 @@ class OpenCLCompiler(Compiler):
                 lws = kernel_builder.local_work_size
 
                 if gws not in gws_arrays:
-                    if(isinstance(gws, tuple)):
+                    if isinstance(gws, tuple):
                         control.append(
                             ArrayDef(
                                 SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
@@ -203,7 +198,7 @@ class OpenCLCompiler(Compiler):
                         gws_arrays[gws] = SymbolRef("global_%d" % gws)
 
                 if lws not in lws_arrays:
-                    if(isinstance(lws, tuple)):
+                    if isinstance(lws, tuple):
                         control.append(
                             ArrayDef(
                                 SymbolRef("local_{}_{} ".format(lws[0], lws[1]), ctypes.c_ulong()),
@@ -283,7 +278,7 @@ class OpenCLCompiler(Compiler):
             for i, f in enumerate(transform_result[1:]):
                 kernels.append(cl.clCreateProgramWithSource(self.context, f.codegen()).build()["kernel_%d" % i])
             fn = OpenCLCompiler.ConcreteSpecializedKernel(
-                self.context, self.global_work_size, self.local_work_size, kernels)
+                self.context, self.global_work_size, self.local_work_size, kernels, self.settings.label)
             func_types = [cl.cl_command_queue] + [cl.cl_kernel for _ in range(len(kernels))] + [
                         cl.cl_mem if isinstance(arg, NDBuffer) else type(arg)
                         for arg in program_config.args_subconfig.values()

@@ -25,10 +25,10 @@ __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
 class PencilCompiler(Compiler):
 
-    def __init__(self, context, device, settings):
+    def __init__(self, context, device=None, settings=None):
         super(PencilCompiler, self).__init__()
         self.context = context
-        self.device = device
+        self.device = device if device else cl.clGetDeviceIDs()[-1]
         self.settings = settings
 
     BlockConverter = CCompiler.BlockConverter

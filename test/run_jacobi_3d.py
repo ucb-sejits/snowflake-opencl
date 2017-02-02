@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import copy
 import sys
 
 import argparse
@@ -204,7 +205,9 @@ if __name__ == '__main__':
     jacobi_stencil = Stencil(sc, 'out', ((ghost_size, size-ghost_size, 1),) * 3, primary_mesh='out')
 
     if run_no_pencil:
-        compiler = OpenCLCompiler(ctx, device, settings)
+        no_pencil_settings = copy.copy(settings)
+        no_pencil_settings.label = "no-pencil"
+        compiler = OpenCLCompiler(ctx, device, no_pencil_settings)
 
         jacobi_operator = compiler.compile(jacobi_stencil)
 
