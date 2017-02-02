@@ -154,73 +154,71 @@ class OpenCLCompiler(Compiler):
                     self.index_name,
                     subconfig[target].shape,
                     stencil_node,
+                    self.context,
                     self.device,
                     self.settings
                 )
-                #
+
                 kernel_body = kernel_builder.visit(i_space)
-                # kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
+                kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
 
                 for new_encode_func in kernel_builder.get_additional_encode_funcs():
                     if new_encode_func not in encode_funcs:
                         encode_funcs.append(new_encode_func)
 
-                shape = subconfig[target].shape
-
-                tiler = OclTiler(shape, i_space, force_local_work_size=None)
-
-                packed_iteration_shape = tiler.packed_iteration_shape
-
-                gws = reduce(operator.mul, packed_iteration_shape)
-                # local_work_size = (4, 4, 4)
-                local_work_size = tiler.local_work_size
-                # local_work_size = LocalSizeComputer(packed_iteration_shape).compute_local_size_bulky()
-
-                local_work_size_1d = reduce(operator.mul, local_work_size)
-                # print("local_work_size {} local_work_size_1d {}".format(local_work_size, local_work_size_1d))
-
-                sub = self.parent_cls.TiledIterationSpaceExpander(
-                    self.index_name,
-                    shape,
-                    tiler).visit(i_space)
-                sub = self.parent_cls.BlockConverter().visit(sub)  # changes node to MultiNode
-
                 # Uncomment the following line to put some printf showing index values at runtime
-                # sub.body.append(self.insert_indexing_debugging_printfs(shape))
+                # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape))
                 # Or uncomment this to be able to print data from one of the buffer names, by specifying name index
-                # sub.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
+                # kernel_body.body.append(self.insert_indexing_debugging_printfs(shape, name_index=0))
 
                 kernel_params = [
                     SymbolRef(name=arg_name, sym_type=get_ctype(
                          arg if not isinstance(arg, NDBuffer) else arg.ary.ravel()  # hack
                      ), _global=True) for arg_name, arg in subconfig.items()
-                   ]
-                kernel_func = FunctionDecl(name=SymbolRef("kernel_%d" % kernel_number), params=kernel_params, defn=[sub])
+                    ]
+                kernel_func = FunctionDecl(
+                    name=SymbolRef("kernel_{}".format(kernel_number)),
+                    params=kernel_params,
+                    defn=[kernel_body]
+                )
+
                 kernel_func.set_kernel()
                 kernels.append(kernel_func)
                 ocl_files.append(OclFile(name=kernel_func.name.name, body=includes + encode_funcs + [kernel_func]))
 
-                # declare new global and local work size arrays if necessary
-                if gws % local_work_size_1d > 0:
-                    expanded_packed = [
-                        (int(packed_iteration_shape[dim] / local_work_size[dim]) + 1) * local_work_size[dim]
-                        for dim in range(len(local_work_size))
-                    ]
-                    gws = reduce(operator.mul, expanded_packed)
-                if gws not in gws_arrays:
-                    control.append(
-                        ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
-                    gws_arrays[gws] = SymbolRef("global_%d" % gws)
+                gws = kernel_builder.global_work_size
+                lws = kernel_builder.local_work_size
 
-                if local_work_size_1d not in lws_arrays:
-                    control.append(
-                        ArrayDef(
-                            SymbolRef("local_%d " % local_work_size_1d, ctypes.c_ulong()),
-                            1,
-                            Array(body=[Constant(local_work_size_1d)])
+                if gws not in gws_arrays:
+                    if(isinstance(gws, tuple)):
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
+                                2,
+                                Array(body=[Constant(x) for x in gws])))
+                        gws_arrays[gws] = SymbolRef("global_{}_{} ".format(gws[0], gws[1]))
+                    else:
+                        control.append(
+                            ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
+                        gws_arrays[gws] = SymbolRef("global_%d" % gws)
+
+                if lws not in lws_arrays:
+                    if(isinstance(lws, tuple)):
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("local_{}_{} ".format(lws[0], lws[1]), ctypes.c_ulong()),
+                                2,
+                                Array(body=[Constant(x) for x in lws])))
+                        lws_arrays[lws] = SymbolRef("local_{}_{} ".format(lws[0], lws[1]))
+                    else:
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("local_%s " % lws, ctypes.c_ulong()),
+                                1,
+                                Array(body=[Constant(lws)])
+                            )
                         )
-                    )
-                    lws_arrays[local_work_size_1d] = SymbolRef("local_%d" % local_work_size_1d)
+                        lws_arrays[lws] = SymbolRef("local_%s" % lws)
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
@@ -231,17 +229,19 @@ class OpenCLCompiler(Compiler):
                                             Ref(SymbolRef(arg.name))])
                     control.append(BitOrAssign(error_code, set_arg))
 
+                ocl_dims = 1 if isinstance(gws, int) else len(gws)
                 # clEnqueueNDRangeKernel
                 enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
-                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(1), NULL(),
-                                   gws_arrays[gws], lws_arrays[local_work_size_1d], Constant(0), NULL(), NULL()
+                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(ocl_dims), NULL(),
+                                   gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
                                ])
+                enqueue_call = BitOrAssign(error_code, enqueue_call)
                 if self.settings.enqueue_iterations > 1:
                     enqueue_call = For(
                             init=Assign(SymbolRef("kernel_pass"), Constant(0)),
                             test=Lt(SymbolRef("kernel_pass"), Constant(self.settings.enqueue_iterations)),
                             incr=PostInc(SymbolRef("kernel_pass")),
-                            body=[BitOrAssign(error_code, enqueue_call)]
+                            body=[enqueue_call]
                         )
                 control.append(enqueue_call)
                 control.append(StringTemplate("""clFinish(queue);"""))

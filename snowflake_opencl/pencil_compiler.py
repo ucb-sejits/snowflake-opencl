@@ -183,20 +183,35 @@ class PencilCompiler(Compiler):
                 lws = kernel_builder.local_work_size
 
                 if gws not in gws_arrays:
-                    control.append(
-                        ArrayDef(
-                            SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
-                            2,
-                            Array(body=[Constant(x) for x in gws])))
-                    gws_arrays[gws] = SymbolRef("global_{}_{} ".format(gws[0], gws[1]))
+                    if(isinstance(gws, tuple)):
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
+                                2,
+                                Array(body=[Constant(x) for x in gws])))
+                        gws_arrays[gws] = SymbolRef("global_{}_{} ".format(gws[0], gws[1]))
+                    else:
+                        control.append(
+                            ArrayDef(SymbolRef("global_%d " % gws, ctypes.c_ulong()), 1, Array(body=[Constant(gws)])))
+                        gws_arrays[gws] = SymbolRef("global_%d" % gws)
 
                 if lws not in lws_arrays:
-                    control.append(
-                        ArrayDef(
-                            SymbolRef("local_{}_{} ".format(lws[0], lws[1]), ctypes.c_ulong()),
-                            2,
-                            Array(body=[Constant(x) for x in lws])))
-                    lws_arrays[lws] = SymbolRef("local_{}_{} ".format(lws[0], lws[1]))
+                    if(isinstance(lws, tuple)):
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("local_{}_{} ".format(lws[0], lws[1]), ctypes.c_ulong()),
+                                2,
+                                Array(body=[Constant(x) for x in lws])))
+                        lws_arrays[lws] = SymbolRef("local_{}_{} ".format(lws[0], lws[1]))
+                    else:
+                        control.append(
+                            ArrayDef(
+                                SymbolRef("local_%s " % lws, ctypes.c_ulong()),
+                                1,
+                                Array(body=[Constant(lws)])
+                            )
+                        )
+                        lws_arrays[lws] = SymbolRef("local_%s" % lws)
 
                 # clSetKernelArg
                 for arg_num, arg in enumerate(kernel_func.params):
@@ -207,9 +222,10 @@ class PencilCompiler(Compiler):
                                             Ref(SymbolRef(arg.name))])
                     control.append(BitOrAssign(error_code, set_arg))
 
+                ocl_dims = 1 if isinstance(gws, int) else len(gws)
                 # clEnqueueNDRangeKernel
                 enqueue_call = FunctionCall(SymbolRef("clEnqueueNDRangeKernel"), [
-                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(2), NULL(),
+                                   SymbolRef("queue"), SymbolRef(kernel_func.name), Constant(ocl_dims), NULL(),
                                    gws_arrays[gws], lws_arrays[lws], Constant(0), NULL(), NULL()
                                ])
                 enqueue_call = BitOrAssign(error_code, enqueue_call)
@@ -221,7 +237,6 @@ class PencilCompiler(Compiler):
                             body=[enqueue_call]
                         )
                 control.append(enqueue_call)
-
                 control.append(StringTemplate("""clFinish(queue);"""))
 
             control.append(StringTemplate("if (error_code != 0) printf(\"error code %d\\n\", error_code);"))
