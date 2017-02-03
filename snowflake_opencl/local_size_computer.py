@@ -1,10 +1,10 @@
 from __future__ import print_function
-__author__ = 'chick'
-
 import math
 import pycl
 
 import itertools
+
+__author__ = 'chick'
 
 
 def product(vector):
@@ -27,7 +27,7 @@ class LocalSizeComputer(object):
                     device, pycl.cl_device_info.CL_DEVICE_MAX_WORK_GROUP_SIZE)
                 self.compute_units = pycl.clGetDeviceInfo(
                     device, pycl.cl_device_info.CL_DEVICE_MAX_COMPUTE_UNITS)
-            except:
+            except Exception:
                 self.max_work_group_size = 512
                 self.max_local_group_sizes = [512, 512, 512]
                 self.compute_units = 40
@@ -78,7 +78,10 @@ class LocalSizeComputer(object):
                 elif dim == 1:  # increase the size of the remaining direction
                     if self.dimensions == 3:
                         self.max_indices[2] = max(
-                            int((self.max_work_group_size / float(self.max_indices[0] * self.max_indices[1])) * overshoot),
+                            int(
+                                (self.max_work_group_size / float(self.max_indices[0] * self.max_indices[1])) *
+                                overshoot
+                            ),
                             self.max_local_group_sizes[2]
                         )
 

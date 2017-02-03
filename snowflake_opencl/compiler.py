@@ -1,7 +1,6 @@
 import ctypes
 import time
 
-import math
 import pycl as cl
 from ctree.c.macros import NULL
 from ctree.c.nodes import BitOrAssign
@@ -149,7 +148,7 @@ class OpenCLCompiler(Compiler):
                 if not all([shape[0] == s for s in shape]):
                     print("cannot pencil if all dims are same size, this is {}".format(shape))
                     return False
-                if not all([x >= self.settings.pencil_kernel_size_threshold for x in shape]):
+                if not all([s >= self.settings.pencil_kernel_size_threshold for s in shape]):
                     print("cannot pencil if below threhold size, this is {} threshold is {}".format(
                         shape, self.settings.pencil_kernel_size_threshold))
                     return False
