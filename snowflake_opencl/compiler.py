@@ -1,6 +1,7 @@
 import ctypes
 import time
 
+import math
 import pycl as cl
 from ctree.c.macros import NULL
 from ctree.c.nodes import BitOrAssign
@@ -19,6 +20,7 @@ from snowflake.stencil_compiler import Compiler, CCompiler
 
 from snowflake_opencl.nd_buffer import NDBuffer
 from snowflake_opencl.kernel_builder import KernelBuilder
+from snowflake_opencl.pencil_kernel_builder import PencilKernelBuilder
 
 __author__ = 'Chick Markley, Seunghwan Choi, Dorthy Luu'
 
@@ -140,19 +142,46 @@ class OpenCLCompiler(Compiler):
             error_code = SymbolRef("error_code")
             gws_arrays, lws_arrays = {}, {}
 
+            def ok_to_pencil():
+                if len(shape) != 3:
+                    print("cannot pencil unless 3d shape, this is {}".format(shape))
+                    return False
+                if not all([shape[0] == s for s in shape]):
+                    print("cannot pencil if all dims are same size, this is {}".format(shape))
+                    return False
+                if not all([x >= self.settings.pencil_kernel_size_threshold for x in shape]):
+                    print("cannot pencil if below threhold size, this is {} threshold is {}".format(
+                        shape, self.settings.pencil_kernel_size_threshold))
+                    return False
+                # if not all([math.log(s) == int(math.log(s)) for s in shape]):
+                #     return False
+                return True
+
             # build a bunch of kernels
             #
             for kernel_number, (target, i_space, stencil_node) in enumerate(
                     zip(self.target_names, c_tree.body, self.snowflake_ast.body)):
 
-                kernel_builder = KernelBuilder(
-                    self.index_name,
-                    subconfig[target].shape,
-                    stencil_node,
-                    self.context,
-                    self.device,
-                    self.settings
-                )
+                if ok_to_pencil():
+                    print("Using pencil kernel builder")
+                    kernel_builder = PencilKernelBuilder(
+                        self.index_name,
+                        subconfig[target].shape,
+                        stencil_node,
+                        self.device,
+                        self.settings
+                    )
+
+                else:
+                    print("Using regular kernel builder")
+                    kernel_builder = KernelBuilder(
+                        self.index_name,
+                        subconfig[target].shape,
+                        stencil_node,
+                        self.context,
+                        self.device,
+                        self.settings
+                    )
 
                 kernel_body = kernel_builder.visit(i_space)
                 kernel_body = self.parent_cls.BlockConverter().visit(kernel_body)  # changes node to MultiNode
