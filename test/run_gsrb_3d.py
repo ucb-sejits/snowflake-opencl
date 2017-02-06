@@ -15,7 +15,7 @@ import time
 # from snowflake_opencl.pencil_compiler import PencilCompiler
 from snowflake_opencl.util import print_mesh
 
-from snowflake.nodes import StencilComponent, WeightArray, Stencil
+from snowflake.nodes import StencilComponent, WeightArray, Stencil, RectangularDomain, StencilGroup
 
 from snowflake_opencl.compiler import OpenCLCompiler
 from snowflake_opencl.nd_buffer import NDBuffer
@@ -166,29 +166,57 @@ if __name__ == '__main__':
 
     size = args.size + (2 * ghost_size)
 
-    buffer_in = np.random.random((size, size, size)).astype(use_type)
+    initial_buffer = np.random.random((size, size, size)).astype(use_type)
 
-    # buffer_in = np.ones((size, size, size)).astype(use_type)
-    # for j, x in enumerate(buffer_in):
+    # initial_buffer = np.ones((size, size, size)).astype(use_type)
+    # for j, x in enumerate(initial_buffer):
     #     for i, y in enumerate(x):
     #         for k, _ in enumerate(y):
-    #             buffer_in[i, j, k] = 1.0  # float(i * j * k)
+    #             initial_buffer[i, j, k] = 1.0  # float(i * j * k)
 
-    buffer_out = np.zeros_like(buffer_in)
-    buffer_out_pencil = np.zeros_like(buffer_in)
+    buffer_1 = initial_buffer.copy()
+    buffer_2 = initial_buffer.copy()
 
     queue = cl.clCreateCommandQueue(ctx)
 
-    in_buf = NDBuffer(queue, buffer_in)
-    out_buf = NDBuffer(queue, buffer_out)
-    out_buf_pencil = NDBuffer(queue, buffer_out_pencil)
+    in_buf_1 = NDBuffer(queue, buffer_1)
+    in_buf_2 = NDBuffer(queue, buffer_2)
 
     sc = StencilComponent(
         'mesh',
         WeightArray(weight_array)
     )
 
-    jacobi_stencil = Stencil(sc, 'out', ((ghost_size, size-ghost_size, 1),) * 3, primary_mesh='out')
+    # red_iteration_space
+    #        / A /   / A /   /
+    #       /   / B /   / B /
+    #      / A /   / A /   /
+    #     /   / B /   / B /
+    #
+    #        /   / C /   / C /
+    #       / D /   / D /   /
+    #      /   / C /   / C /
+    #     / D /   / D /   /
+    #
+    red_iteration_space_a = RectangularDomain(((1, -2, 2), (1, -2, 2), (1, -2, 2)))
+    red_iteration_space_b = RectangularDomain(((2, -1, 2), (2, -1, 2), (1, -2, 2)))
+    red_iteration_space_c = RectangularDomain(((2, -1, 2), (1, -2, 2), (2, -1, 2)))
+    red_iteration_space_d = RectangularDomain(((1, -2, 2), (2, -1, 2), (2, -1, 2)))
+
+    red_iteration_space = red_iteration_space_a + red_iteration_space_b + \
+                          red_iteration_space_c + red_iteration_space_d
+    red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='mesh')
+
+    black_iteration_space_a = RectangularDomain(((1, -2, 2), (1, -2, 2), (2, -1, 2)))
+    black_iteration_space_b = RectangularDomain(((2, -1, 2), (2, -1, 2), (2, -1, 2)))
+    black_iteration_space_c = RectangularDomain(((2, -1, 2), (1, -2, 2), (1, -2, 2)))
+    black_iteration_space_d = RectangularDomain(((1, -2, 2), (2, -1, 2), (1, -2, 2)))
+
+    black_iteration_space = black_iteration_space_a + black_iteration_space_b + \
+                            black_iteration_space_c + black_iteration_space_d
+    black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='mesh')
+
+    gsrb_stencil = StencilGroup([red_stencil, black_stencil])
 
     if run_no_pencil:
         no_pencil_settings = copy.copy(settings)
@@ -196,14 +224,14 @@ if __name__ == '__main__':
         no_pencil_settings.pencil_kernel_size_threshold = sys.maxint
         compiler = OpenCLCompiler(ctx, device, no_pencil_settings)
 
-        jacobi_operator = compiler.compile(jacobi_stencil)
+        jacobi_operator = compiler.compile(gsrb_stencil)
 
         start_time = time.time()
 
         out_evt = None
         for _ in range(iterations):
-            jacobi_operator(out_buf, in_buf)
-            buffer_out, out_evt = cl.buffer_to_ndarray(queue, out_buf.buffer, buffer_out)
+            jacobi_operator(in_buf_1)
+            buffer_1, out_evt = cl.buffer_to_ndarray(queue, in_buf_1.buffer, buffer_1)
 
         out_evt.wait()
 
@@ -211,21 +239,21 @@ if __name__ == '__main__':
 
         if show_mesh:
             print("Input " + "=" * 80)
-            print_mesh(buffer_in)
+            print_mesh(initial_buffer)
             print("Output" + "=" * 80)
-            print_mesh(buffer_out)
+            print_mesh(buffer_1)
 
         # subprocess.call(["ctree", "-cc"])
 
     pencil_compiler = OpenCLCompiler(ctx, device, settings)
-    jacobi_operator_pencil = pencil_compiler.compile(jacobi_stencil)
+    jacobi_operator_pencil = pencil_compiler.compile(gsrb_stencil)
 
     start_time_pencil = time.time()
 
     out_evt = None
     for _ in range(iterations):
-        jacobi_operator_pencil(out_buf_pencil, in_buf)
-        buffer_out_pencil, out_evt = cl.buffer_to_ndarray(queue, out_buf_pencil.buffer, buffer_out_pencil)
+        jacobi_operator_pencil(in_buf_1)
+        buffer_2, out_evt = cl.buffer_to_ndarray(queue, in_buf_2.buffer, buffer_2)
 
     out_evt.wait()
 
@@ -233,13 +261,13 @@ if __name__ == '__main__':
 
     if show_mesh:
         print("Input " + "=" * 80)
-        print_mesh(buffer_in)
+        print_mesh(initial_buffer)
         print("Output" + "=" * 80)
-        print_mesh(buffer_out_pencil)
+        print_mesh(buffer_2)
 
     if run_no_pencil:
         if test_method == "numpy":
-            np.testing.assert_array_almost_equal(buffer_out, buffer_out_pencil, decimal=4)
+            np.testing.assert_array_almost_equal(buffer_1, buffer_2, decimal=4)
         elif test_method == "python":
             differences = 0
             values_compared = 0
@@ -247,20 +275,20 @@ if __name__ == '__main__':
                 for y in range(size):
                     for z in range(size):
                         values_compared += 1
-                        if out_buf.ary[x, y, z] - out_buf_pencil.ary[x, y, z] > 0.0001:
+                        if buffer_1.ary[x, y, z] - buffer_2.ary[x, y, z] > 0.0001:
                             differences += 1
-                            computed = buffer_in[x+1, y, z] + buffer_in[x-1, y, z] + \
-                                buffer_in[x, y+1, z] + buffer_in[x, y-1, z] + \
-                                buffer_in[x, y, z+1] + buffer_in[x, y, z-1] + \
-                                (-6.0 * buffer_in[x, y, z])
+                            computed = buffer_1[x+1, y, z] + buffer_1[x-1, y, z] + \
+                                buffer_1[x, y+1, z] + buffer_1[x, y-1, z] + \
+                                buffer_1[x, y, z+1] + buffer_1[x, y, z-1] + \
+                                (-6.0 * buffer_1[x, y, z])
 
                             print("computed_value {} {:10.4f} regular {:10.4f} pencil {:10.4f} delta {:10.4f}".format(
-                                (x, y, z), computed, out_buf.ary[x, y, z], out_buf_pencil.ary[x, y, z],
-                                out_buf.ary[x, y, z] - out_buf_pencil.ary[x, y, z]
+                                (x, y, z), computed, buffer_1.ary[x, y, z], buffer_2.ary[x, y, z],
+                                buffer_1.ary[x, y, z] - buffer_2.ary[x, y, z]
                             )
                             )
 
-                            little_mesh = buffer_in[x-1:x+2, y-1:y+2, z-1:z+2]
+                            little_mesh = buffer_1[x-1:x+2, y-1:y+2, z-1:z+2]
                             print_mesh(little_mesh)
             print("Total differences: {} out of {}".format(differences, values_compared))
 

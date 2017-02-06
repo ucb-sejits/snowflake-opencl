@@ -214,11 +214,12 @@ class OpenCLCompiler(Compiler):
 
                 if gws not in gws_arrays:
                     if isinstance(gws, tuple):
-                        control.append(
-                            ArrayDef(
+                        array_def = ArrayDef(
                                 SymbolRef("global_{}_{} ".format(gws[0], gws[1]), ctypes.c_ulong()),
                                 2,
-                                Array(body=[Constant(x) for x in gws])))
+                                Array(body=[Constant(x) for x in gws])
+                        )
+                        control.append(array_def)
                         gws_arrays[gws] = SymbolRef("global_{}_{} ".format(gws[0], gws[1]))
                     else:
                         control.append(

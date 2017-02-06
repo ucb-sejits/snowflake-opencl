@@ -41,6 +41,8 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
         self.local_work_modulus = None
         self.global_work_modulus = None
 
+        self.packed_shape = None
+
         self.debug_plane_fill = False
         self.debug_plane_values = False
         self.debug_kernel_indices = False
@@ -128,24 +130,36 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
     def visit_IterationSpace(self, node):
         node = self.generic_visit(node)
 
-        total_work_dims, total_strides, total_lows = [], [], []
-
         spaces = node.space.spaces
         num_spaces = len(spaces)
+
+        total_work_dims, total_strides, total_lows = [], [], []
+        self.packed_shape = [0 for _ in spaces[0].low]
+
+        space_filling_factor = 1 / num_spaces
+
         for space in node.space.spaces:
             lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))
             highs = tuple(self.make_high(high, dim) for dim, high in enumerate(space.high))
             strides = space.stride
             work_dims = []
 
-            for dim, (low, high, stride) in reversed(list(enumerate(zip(lows, highs, strides)))):
-                work_dims.append((high - low + stride - 1) / stride)
+            lo_hi_stride_list = list(enumerate(zip(lows, highs, strides)))
+
+            # _, (first_index_low, first_index_hi, first_index_stride) = lo_hi_stride_list[0]
+
+            for dim, (low, high, stride) in lo_hi_stride_list:
+                dim_size = (high - low + stride - 1) / stride
+                work_dims.append(dim_size)
+                self.packed_shape[dim] += dim_size
 
             total_work_dims.append(tuple(work_dims))
             total_strides.append(strides)
             total_lows.append(lows)
 
-        self.global_work_size = total_work_dims[0][1:]
+        # self.global_work_size = total_work_dims[0][1:]
+        self.global_work_size = tuple(x / num_spaces for x in self.packed_shape[1:])
+
         self.global_work_size_1d = reduce(operator.mul, self.global_work_size)
 
         self.compute_plane_info()
