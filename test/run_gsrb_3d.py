@@ -5,7 +5,6 @@ import sys
 
 import argparse
 import random
-import subprocess
 
 import math
 import numpy as np
@@ -203,8 +202,8 @@ if __name__ == '__main__':
     red_iteration_space_c = RectangularDomain(((2, -1, 2), (1, -2, 2), (2, -1, 2)))
     red_iteration_space_d = RectangularDomain(((1, -2, 2), (2, -1, 2), (2, -1, 2)))
 
-    red_iteration_space = red_iteration_space_a + red_iteration_space_b + \
-                          red_iteration_space_c + red_iteration_space_d
+    red_iteration_space = red_iteration_space_a + red_iteration_space_b +\
+        red_iteration_space_c + red_iteration_space_d
     red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='mesh')
 
     black_iteration_space_a = RectangularDomain(((1, -2, 2), (1, -2, 2), (2, -1, 2)))
@@ -212,8 +211,8 @@ if __name__ == '__main__':
     black_iteration_space_c = RectangularDomain(((2, -1, 2), (1, -2, 2), (1, -2, 2)))
     black_iteration_space_d = RectangularDomain(((1, -2, 2), (2, -1, 2), (1, -2, 2)))
 
-    black_iteration_space = black_iteration_space_a + black_iteration_space_b + \
-                            black_iteration_space_c + black_iteration_space_d
+    black_iteration_space = black_iteration_space_a + black_iteration_space_b +\
+        black_iteration_space_c + black_iteration_space_d
     black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='mesh')
 
     gsrb_stencil = StencilGroup([red_stencil, black_stencil])
@@ -243,6 +242,7 @@ if __name__ == '__main__':
             print("Output" + "=" * 80)
             print_mesh(buffer_1)
 
+        # import subprocess
         # subprocess.call(["ctree", "-cc"])
 
     pencil_compiler = OpenCLCompiler(ctx, device, settings)

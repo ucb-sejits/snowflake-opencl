@@ -65,6 +65,7 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
     def make_high(self, ceiling, dimension):
         return ceiling if ceiling > 0 else self.reference_array_shape[dimension] + ceiling
 
+    # noinspection PyProtectedMember
     def get_additional_encode_funcs(self):
         local_reference_shape = self.plane_size
         new_encode_func = generate_encode_macro(
@@ -135,8 +136,6 @@ class PencilKernelBuilder(CCompiler.IterationSpaceExpander):
 
         total_work_dims, total_strides, total_lows = [], [], []
         self.packed_shape = [0 for _ in spaces[0].low]
-
-        space_filling_factor = 1 / num_spaces
 
         for space in node.space.spaces:
             lows = tuple(self.make_low(low, dim) for dim, low in enumerate(space.low))

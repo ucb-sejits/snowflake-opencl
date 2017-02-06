@@ -5,7 +5,6 @@ import sys
 
 import argparse
 import random
-import subprocess
 
 import math
 import numpy as np
@@ -215,6 +214,7 @@ if __name__ == '__main__':
             print("Output" + "=" * 80)
             print_mesh(buffer_out)
 
+        # import subprocess
         # subprocess.call(["ctree", "-cc"])
 
     pencil_compiler = OpenCLCompiler(ctx, device, settings)
