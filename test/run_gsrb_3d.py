@@ -175,6 +175,8 @@ if __name__ == '__main__':
 
     queue = cl.clCreateCommandQueue(ctx)
 
+    buffer_1 = None
+    in_buf_1 = None
     buffer_2 = initial_buffer.copy()
     in_buf_2 = NDBuffer(queue, buffer_2)
 
@@ -263,7 +265,7 @@ if __name__ == '__main__':
 
     out_evt = None
     for _ in range(iterations):
-        jacobi_operator_pencil(in_buf_1)
+        jacobi_operator_pencil(in_buf_2)
         buffer_2, out_evt = cl.buffer_to_ndarray(queue, in_buf_2.buffer, buffer_2)
 
     out_evt.wait()
