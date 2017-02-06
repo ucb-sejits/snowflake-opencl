@@ -173,12 +173,9 @@ if __name__ == '__main__':
     #         for k, _ in enumerate(y):
     #             initial_buffer[i, j, k] = 1.0  # float(i * j * k)
 
-    buffer_1 = initial_buffer.copy()
-    buffer_2 = initial_buffer.copy()
-
     queue = cl.clCreateCommandQueue(ctx)
 
-    in_buf_1 = NDBuffer(queue, buffer_1)
+    buffer_2 = initial_buffer.copy()
     in_buf_2 = NDBuffer(queue, buffer_2)
 
     sc = StencilComponent(
@@ -206,18 +203,32 @@ if __name__ == '__main__':
         red_iteration_space_c + red_iteration_space_d
     red_stencil = Stencil(sc, 'mesh', red_iteration_space, primary_mesh='mesh')
 
-    black_iteration_space_a = RectangularDomain(((1, -2, 2), (1, -2, 2), (2, -1, 2)))
-    black_iteration_space_b = RectangularDomain(((2, -1, 2), (2, -1, 2), (2, -1, 2)))
-    black_iteration_space_c = RectangularDomain(((2, -1, 2), (1, -2, 2), (1, -2, 2)))
-    black_iteration_space_d = RectangularDomain(((1, -2, 2), (2, -1, 2), (1, -2, 2)))
+    # black_iteration_space
+    #        /   / E /   / E /
+    #       / F /   / F /   /
+    #      /   / E /   / E /
+    #     / F /   / F /   /
+    #
+    #        / G /   / G /   /
+    #       /   / H /   / H /
+    #      / G /   / G /   /
+    #     /   / H /   / H /
+    #
+    black_iteration_space_e = RectangularDomain(((1, -2, 2), (1, -2, 2), (2, -1, 2)))
+    black_iteration_space_f = RectangularDomain(((2, -1, 2), (2, -1, 2), (2, -1, 2)))
+    black_iteration_space_g = RectangularDomain(((2, -1, 2), (1, -2, 2), (1, -2, 2)))
+    black_iteration_space_h = RectangularDomain(((1, -2, 2), (2, -1, 2), (1, -2, 2)))
 
-    black_iteration_space = black_iteration_space_a + black_iteration_space_b +\
-        black_iteration_space_c + black_iteration_space_d
+    black_iteration_space = black_iteration_space_e + black_iteration_space_f +\
+        black_iteration_space_g + black_iteration_space_h
     black_stencil = Stencil(sc, 'mesh', black_iteration_space, primary_mesh='mesh')
 
     gsrb_stencil = StencilGroup([red_stencil, black_stencil])
 
     if run_no_pencil:
+        buffer_1 = initial_buffer.copy()
+        in_buf_1 = NDBuffer(queue, buffer_1)
+
         no_pencil_settings = copy.copy(settings)
         no_pencil_settings.label = "no-pencil"
         no_pencil_settings.pencil_kernel_size_threshold = sys.maxint
